@@ -29,6 +29,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Alimer.Bindings.SDL-main\src\Alimer.Bindings.SDL\Alimer.Bindings.SDL.csproj" />
+      <ProjectReference Include="..\ThirdParty\VMAsharp\VMASharp\VMASharp.csproj" />
     </ItemGroup>
 
 </Project>

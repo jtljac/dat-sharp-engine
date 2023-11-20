@@ -7,7 +7,7 @@ using Silk.NET.SDL;
 namespace dat_sharp_engine;
 
 public class DatSharpEngine {
-    internal readonly Sdl _sdl = Sdl.GetApi();
+    internal readonly Sdl sdl = Sdl.GetApi();
     
     public readonly DatRenderer renderer;
     public readonly EngineSettings engineSettings = new EngineSettings();
@@ -23,12 +23,12 @@ public class DatSharpEngine {
 
     public void StartLoop() {
         Logger.EngineLogger.Info("Initialising engine");
-        if (_sdl.Init(Sdl.InitEverything) != 0) {
+        Logger.EngineLogger.Debug("Initialising SDL");
+        if (sdl.Init(Sdl.InitEverything) != 0) {
             throw new Exception("Failed to initialise SDL");
         }
-        Logger.EngineLogger.Info("Initialised SDL");
         unsafe {
-            window = _sdl.CreateWindow(appSettings.name,
+            window = sdl.CreateWindow(appSettings.name,
                 Sdl.WindowposUndefined,
                 Sdl.WindowposUndefined,
                 engineSettings.width,
@@ -39,17 +39,15 @@ public class DatSharpEngine {
                 throw new Exception("Failed to create window");
             }
         }
+        Logger.EngineLogger.Debug("Created Window ({}, {})", engineSettings.width, engineSettings.height);
 
-        Logger.EngineLogger.Info("Created Window ({}, {})", engineSettings.width, engineSettings.height);
-
+        Logger.EngineLogger.Info("Initialising Renderer");
         renderer.Initialise();
-        Logger.EngineLogger.Info("Initialised Renderer");
         
-        Logger.EngineLogger.Info("Initising finished, starting main loop");
-
-        var lastTime = _sdl.GetTicks() - 16;
+        Logger.EngineLogger.Info("Initialising finished, starting main loop");
+        var lastTime = sdl.GetTicks() - 16;
         while (!shouldClose) {
-            var currentTime = _sdl.GetTicks();
+            var currentTime = sdl.GetTicks();
             var deltaTime = (currentTime - lastTime) / 1000f;
             
             // SDL.SDL.SDL_PollEvent()
@@ -64,10 +62,10 @@ public class DatSharpEngine {
         renderer.Cleanup();
 
         unsafe {
-            _sdl.DestroyWindow(window);
+            sdl.DestroyWindow(window);
         }
 
-        _sdl.Quit();
-        Logger.EngineLogger.Info("Bye!");
+        sdl.Quit();
+        Logger.EngineLogger.Debug("Bye!");
     }
 }

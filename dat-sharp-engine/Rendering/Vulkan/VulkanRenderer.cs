@@ -1,11 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using dat_sharp_engine.Util;
+using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.SDL;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
+using VMASharp;
 
 namespace dat_sharp_engine.Rendering.Vulkan; 
 
@@ -19,20 +21,22 @@ public class VulkanRenderer : DatRenderer {
     private Device _device;
     
     // Memory
-    // private VmaAllocator _allocator = VmaAllocator.Null;
+    private VulkanMemoryAllocator _allocator;
     
     // Queues
-    private uint graphicsQueueIndex;    // Queue index for graphics stuff
-    private Queue graphicsQueue;        // Queue for graphics stuff
-    private uint transferQueueIndex;    // Queue index for transferring assets to the gpu
-    private Queue transferQueue;        // Queue for transferring assets to the gpu
+    private uint _graphicsQueueIndex;    // Queue index for graphics stuff
+    private Queue _graphicsQueue;        // Queue for graphics stuff
+    private uint _transferQueueIndex;    // Queue index for transferring assets to the gpu
+    private Queue _transferQueue;        // Queue for transferring assets to the gpu
+
+    private SurfaceKHR _surface;
     
     // Debug
     private ExtDebugUtils _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
 
     public VulkanRenderer(DatSharpEngine datSharpEngine) : base(datSharpEngine) {
-        _sdl = _datSharpEngine._sdl;
+        _sdl = _datSharpEngine.sdl;
     }
 
     public override WindowFlags GetWindowFlags() {
@@ -49,6 +53,9 @@ public class VulkanRenderer : DatRenderer {
         InitialiseVulkanPhysicalDevice();
         SelectQueues();
         InitialiseVulkanDevice();
+        InitialiseVma();
+        InitialiseSurface();
+        InitialiseSwapchain();
     }
 
     /// <summary>
@@ -140,7 +147,9 @@ public class VulkanRenderer : DatRenderer {
     /// Get the required instance extensions
     /// </summary>
     /// <returns>A list of instance extensions to use</returns>
-    /// <exception cref="Exception"></exception>
+    /// <exception cref="Exception">
+    /// Thrown when the engine fails to get the required instance extensions from SDL
+    /// </exception>
     private unsafe List<string> GetInstanceExtensions() {
         var extensions = new List<string> {
             ExtDebugUtils.ExtensionName
@@ -186,104 +195,9 @@ public class VulkanRenderer : DatRenderer {
         // TODO: Save selection
     }
 
-    private unsafe void InitialiseVulkanDevice() {
-        Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
-        var deviceExtensions = new List<String> {
-            KhrSwapchain.ExtensionName
-        };
-
-        var enabledExtensions = SilkMarshal.StringArrayToPtr(deviceExtensions.ToArray());
-
-        var priority = 1.0f;
-
-        // Make sure we only request 1 queue if the transfer and graphics queues are the same
-        List<DeviceQueueCreateInfo> queueInfos = new() {
-            new DeviceQueueCreateInfo() {
-                SType = StructureType.DeviceCreateInfo,
-                QueueCount = 1,
-                QueueFamilyIndex = graphicsQueueIndex,
-                PQueuePriorities = &priority
-            }
-        };
-
-        if (transferQueueIndex != graphicsQueueIndex) {
-            queueInfos.Add(new DeviceQueueCreateInfo() {
-                SType = StructureType.DeviceCreateInfo,
-                QueueCount = 1,
-                QueueFamilyIndex = transferQueueIndex,
-                PQueuePriorities = &priority
-            });
-        }
-
-        fixed (DeviceQueueCreateInfo* queues = queueInfos.ToArray()) {
-            DeviceCreateInfo deviceInfo = new() {
-                SType = StructureType.DeviceCreateInfo,
-                EnabledLayerCount = 0,
-                PpEnabledLayerNames = null,
-                EnabledExtensionCount = (uint)deviceExtensions.Count,
-                PpEnabledExtensionNames = (byte**)enabledExtensions,
-                QueueCreateInfoCount = (uint)queueInfos.Count,
-                PQueueCreateInfos = queues
-            };
-
-
-            if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
-                throw new Exception("Failed to create device");
-            }
-
-            _vk.GetDeviceQueue(_device, graphicsQueueIndex, 0, out graphicsQueue);
-            _vk.GetDeviceQueue(_device, transferQueueIndex, 0, out graphicsQueue);
-        }
-    }
-
-    public override void Draw(float deltaTime, float gameTime) {
-        // Console.WriteLine(gameTime);
-    }
-
-    public override unsafe void Cleanup() {
-        _vk.DestroyDevice(_device, null);
-        _extDebugUtils.Dispose();
-        _vk.DestroyInstance(_instance, null);
-        _vk.Dispose();
-    }
-    
-    
-    
-    /* --------------------------------------- */
-    /* Debug                                   */
-    /* --------------------------------------- */
-
-    private static unsafe uint VulkanDebugCallback(DebugUtilsMessageSeverityFlagsEXT severityFlags,
-        DebugUtilsMessageTypeFlagsEXT messageTypeFlags,
-        DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData) {
-        var message = Marshal.PtrToStringUTF8((nint)pCallbackData->PMessage);
-        Logger.EngineLogger.Warn("Vulkan | {} | {}", severityFlags, message);
-        
-        return Vk.False;
-    }
-    
-    /* --------------------------------------- */
-    /* Util                                    */
-    /* --------------------------------------- */
-    private unsafe bool CheckValidationLayerSupport(List<string> requestedLayers) {
-        List<String> availableLayers;
-        {
-            uint layerCount = 0;
-            _vk.EnumerateInstanceLayerProperties(ref layerCount, null);
-            var properties = new LayerProperties[layerCount];
-            fixed (LayerProperties* @props = properties) {
-                _vk.EnumerateInstanceLayerProperties(ref layerCount, @props);
-            }
-
-            availableLayers = properties.Select((prop) => Marshal.PtrToStringUTF8((IntPtr)prop.LayerName)).ToList()!;
-        }
-        
-        Logger.EngineLogger.Debug("Available validation layers extensions: {content}", availableLayers);
-
-        return requestedLayers.TrueForAll((layer) => availableLayers.Contains(layer));
-    }
-
+    /// <summary>
+    /// Select the queues for the engine to use
+    /// </summary>
     private unsafe void SelectQueues() {
         uint queueFamilyCount = 0;
         _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, null);
@@ -298,9 +212,13 @@ public class VulkanRenderer : DatRenderer {
 
             if (!properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) continue;
             
-            graphicsQueueIndex = i;
+            _graphicsQueueIndex = i;
             break;
         }
+        
+        Logger.EngineLogger.Debug("Selected Graphics Queue: {}", 
+            GetQueueDescription((int) _graphicsQueueIndex, queueFamilies[_graphicsQueueIndex])
+        );
         
         // Find transfer queue
         var tempTrans = -1;
@@ -315,9 +233,13 @@ public class VulkanRenderer : DatRenderer {
             break;
         }
 
-        // // If we can't find a dedicated transfer queue, just use the graphics queue
-        // transferQueueIndex = tempTrans != -1 ? (uint)tempTrans : graphicsQueueIndex;
-        //
+        // If we can't find a dedicated transfer queue, just use the graphics queue
+        _transferQueueIndex = tempTrans != -1 ? (uint)tempTrans : _graphicsQueueIndex;
+        
+        Logger.EngineLogger.Debug("Selected Transfer Queue: {}", 
+            GetQueueDescription((int) _transferQueueIndex, queueFamilies[_transferQueueIndex])
+        );
+        
         // // Find Compute queue
         // var tempComp = -1;
         // for (var i = 0; i < queueFamilies.Length; i++) {
@@ -332,28 +254,205 @@ public class VulkanRenderer : DatRenderer {
         // }
         //
         // // If we can't find a dedicated compute queue, just use the graphics queue
-        // computeQueueIndex = tempComp != -1 ? (uint)tempComp : graphicsQueueIndex;
+        // _computeQueueIndex = tempComp != -1 ? (uint)tempComp : graphicsQueueIndex;
+        //
+        // Logger.EngineLogger.Debug("Selected Compute Queue: {}", 
+        //     GetQueueDescription((int) _computeQueueIndex, queueFamilies[_computeQueueIndex])
+        // );
     }
 
-    private unsafe void printQueues() {
+    /// <summary>
+    /// Initialise the logical device
+    /// </summary>
+    /// <exception cref="Exception">Thrown when creating the physical device fails</exception>
+    private unsafe void InitialiseVulkanDevice() {
+        Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
+        var deviceExtensions = new List<string> {
+            KhrSwapchain.ExtensionName
+        };
+
+        var enabledExtensions = SilkMarshal.StringArrayToPtr(deviceExtensions.ToArray());
+
+        var priority = 1.0f;
+        List<DeviceQueueCreateInfo> queueInfos = new() {
+            new DeviceQueueCreateInfo() {
+                SType = StructureType.DeviceQueueCreateInfo,
+                QueueCount = 1,
+                QueueFamilyIndex = _graphicsQueueIndex,
+                PQueuePriorities = &priority
+            }
+        };
+
+        // Make sure we only request 1 queue if the transfer and graphics queues are the same
+        if (_transferQueueIndex != _graphicsQueueIndex) {
+            queueInfos.Add(new DeviceQueueCreateInfo() {
+                SType = StructureType.DeviceQueueCreateInfo,
+                QueueCount = 1,
+                QueueFamilyIndex = _transferQueueIndex,
+                PQueuePriorities = &priority
+            });
+        }
+
+        // Toggle on features
+        PhysicalDeviceFeatures features = new PhysicalDeviceFeatures() {
+            FillModeNonSolid = Vk.True
+        };
+        
+        // Device features that require setup via PNext
+        // (This would have been in it's own function but memory management needs to be handled in silly ways for garbage
+        // collection reasons)
+        var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures() {
+            SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
+            ShaderDrawParameters = true
+        };
+        var vulkan13Features = new PhysicalDeviceVulkan13Features() {
+            SType = StructureType.PhysicalDeviceVulkan13Features,
+            DynamicRendering = true,
+            Synchronization2 = true,
+            PNext = &drawParametersFeatures
+        };
+
+        fixed (DeviceQueueCreateInfo* queues = queueInfos.ToArray()) {
+            DeviceCreateInfo deviceInfo = new() {
+                SType = StructureType.DeviceCreateInfo,
+                EnabledLayerCount = 0,
+                PpEnabledLayerNames = null,
+                EnabledExtensionCount = (uint)deviceExtensions.Count,
+                PpEnabledExtensionNames = (byte**)enabledExtensions,
+                QueueCreateInfoCount = (uint)queueInfos.Count,
+                PQueueCreateInfos = queues,
+                PEnabledFeatures = &features,
+                PNext = &vulkan13Features
+            };
+            
+            if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
+                throw new Exception("Failed to create device");
+            }
+
+            _vk.GetDeviceQueue(_device, _graphicsQueueIndex, 0, out _graphicsQueue);
+            _vk.GetDeviceQueue(_device, _transferQueueIndex, 0, out _transferQueue);
+        }
+    }
+
+    /// <summary>
+    /// Initialise the memory allocator
+    /// </summary>
+    private void InitialiseVma() {
+        VulkanMemoryAllocatorCreateInfo vmaCreateInfo = new() {
+            VulkanAPIObject = _vk,
+            Instance = _instance,
+            PhysicalDevice = _physicalDevice,
+            LogicalDevice = _device,
+            VulkanAPIVersion = Vk.Version13
+        };
+
+        _allocator = new VulkanMemoryAllocator(vmaCreateInfo);
+    }
+
+    private unsafe void InitialiseSurface() {
+        VkNonDispatchableHandle handle;
+        _sdl.VulkanCreateSurface(_datSharpEngine.window, _instance.ToHandle(), &handle);
+        _surface = handle.ToSurface();
+    }
+
+    private void InitialiseSwapchain() {
+    }
+
+    public override void Draw(float deltaTime, float gameTime) {
+        // Console.WriteLine(gameTime);
+    }
+
+    public override unsafe void Cleanup() {
+        _allocator.Dispose();
+        _vk.DestroyDevice(_device, null);
+        _extDebugUtils.Dispose();
+        _vk.DestroyInstance(_instance, null);
+        _vk.Dispose();
+    }
+    
+    
+    
+    /* --------------------------------------- */
+    /* Debug                                   */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// The Callback used for validation layer messages
+    /// </summary>
+    /// <param name="severityFlags">The flags for the severity of the message</param>
+    /// <param name="messageTypeFlags">The flags for the type of the message</param>
+    /// <param name="pCallbackData">The message data</param>
+    /// <param name="pUserData">An attached pointer for user data</param>
+    /// <returns>Always false</returns>
+    private static unsafe uint VulkanDebugCallback(DebugUtilsMessageSeverityFlagsEXT severityFlags,
+        DebugUtilsMessageTypeFlagsEXT messageTypeFlags,
+        DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void* pUserData) {
+        var message = Marshal.PtrToStringUTF8((nint)pCallbackData->PMessage);
+        Logger.EngineLogger.Warn("Vulkan | {} | {}", severityFlags, message);
+        
+        return Vk.False;
+    }
+    
+    /* --------------------------------------- */
+    /* Util                                    */
+    /* --------------------------------------- */
+    
+    /// <summary>
+    /// Check the device supports the requested validation layers
+    /// </summary>
+    /// <param name="requestedLayers">A list of the layers the engine wants to use</param>
+    /// <returns>True if the device has all of the requested layers available</returns>
+    private unsafe bool CheckValidationLayerSupport(List<string> requestedLayers) {
+        List<String> availableLayers;
+        {
+            uint layerCount = 0;
+            _vk.EnumerateInstanceLayerProperties(ref layerCount, null);
+            var properties = new LayerProperties[layerCount];
+            fixed (LayerProperties* @props = properties) {
+                _vk.EnumerateInstanceLayerProperties(ref layerCount, @props);
+            }
+
+            availableLayers = properties.Select((prop) => Marshal.PtrToStringUTF8((IntPtr)prop.LayerName)).ToList()!;
+        }
+        
+        Logger.EngineLogger.Trace("Available validation layers extensions: {content}", availableLayers);
+
+        return requestedLayers.TrueForAll((layer) => availableLayers.Contains(layer));
+    }
+    
+    /// <summary>
+    /// Print the definitions of each queue on the given device
+    /// </summary>
+    /// <param name="physicalDevice">The device to get the queues of</param>
+    private unsafe void PrintQueues(PhysicalDevice physicalDevice) {
         uint queueFamilyCount = 0;
-        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, null);
+        _vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, ref queueFamilyCount, null);
         var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
         fixed (QueueFamilyProperties* queueFam = queueFamilies) {
-            _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, queueFam);
+            _vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, ref queueFamilyCount, queueFam);
         }
         Logger.EngineLogger.Info("Queues: ");
         for (var i = 0; i < queueFamilies.Length; i++) {
-            QueueFamilyProperties properties = queueFamilies[i];
-            StringBuilder message =
-                new StringBuilder().Append($"Index: {i}").Append($" | Count: {properties.QueueCount}");
-
-            if (properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) message.Append(" | Graphics");
-            if (properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) message.Append(" | Compute");
-            if (properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) message.Append(" | Transfer");
-            if (properties.QueueFlags.HasFlag(QueueFlags.ProtectedBit)) message.Append(" | Protected");
-            if (properties.QueueFlags.HasFlag(QueueFlags.SparseBindingBit)) message.Append(" | Sparse Binding");
-            Logger.EngineLogger.Info(message.ToString());
+            Logger.EngineLogger.Info(GetQueueDescription(i, queueFamilies[i]));
         }
+    }
+
+    /// <summary>
+    /// Get a string description of the given queue
+    /// </summary>
+    /// <param name="queueIndex">The index of the queue</param>
+    /// <param name="properties">The properties of the queue</param>
+    /// <returns>A string description of the queue</returns>
+    private static string GetQueueDescription(int queueIndex, QueueFamilyProperties properties) {
+        StringBuilder message =
+            new StringBuilder().Append($"Index: {queueIndex}").Append($" | Count: {properties.QueueCount}");
+
+        if (properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) message.Append(" | Graphics");
+        if (properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) message.Append(" | Compute");
+        if (properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) message.Append(" | Transfer");
+        if (properties.QueueFlags.HasFlag(QueueFlags.ProtectedBit)) message.Append(" | Protected");
+        if (properties.QueueFlags.HasFlag(QueueFlags.SparseBindingBit)) message.Append(" | Sparse Binding");
+        return message.ToString();
     }
 }
