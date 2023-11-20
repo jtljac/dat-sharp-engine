@@ -1,0 +1,3 @@
+[submodule "ThirdParty/VMAsharp"]
+	path = ThirdParty/VMAsharp
+	url = https://github.com/sunkin351/VMASharp
