@@ -5,7 +5,7 @@ using Silk.NET.Core.Native;
 using Silk.NET.SDL;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
-using Version = System.Version;
+using Silk.NET.Vulkan.Extensions.KHR;
 
 namespace dat_sharp_engine.Rendering.Vulkan; 
 
@@ -22,6 +22,10 @@ public class VulkanRenderer : DatRenderer {
     // private VmaAllocator _allocator = VmaAllocator.Null;
     
     // Queues
+    private uint graphicsQueueIndex;    // Queue index for graphics stuff
+    private Queue graphicsQueue;        // Queue for graphics stuff
+    private uint transferQueueIndex;    // Queue index for transferring assets to the gpu
+    private Queue transferQueue;        // Queue for transferring assets to the gpu
     
     // Debug
     private ExtDebugUtils _extDebugUtils;
@@ -43,6 +47,8 @@ public class VulkanRenderer : DatRenderer {
         Logger.EngineLogger.Info("Initialising Vulkan");
         InitialiseVulkanInstance();
         InitialiseVulkanPhysicalDevice();
+        SelectQueues();
+        InitialiseVulkanDevice();
     }
 
     /// <summary>
@@ -182,8 +188,52 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseVulkanDevice() {
         Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
-        
-        
+        var deviceExtensions = new List<String> {
+            KhrSwapchain.ExtensionName
+        };
+
+        var enabledExtensions = SilkMarshal.StringArrayToPtr(deviceExtensions.ToArray());
+
+        var priority = 1.0f;
+
+        // Make sure we only request 1 queue if the transfer and graphics queues are the same
+        List<DeviceQueueCreateInfo> queueInfos = new() {
+            new DeviceQueueCreateInfo() {
+                SType = StructureType.DeviceCreateInfo,
+                QueueCount = 1,
+                QueueFamilyIndex = graphicsQueueIndex,
+                PQueuePriorities = &priority
+            }
+        };
+
+        if (transferQueueIndex != graphicsQueueIndex) {
+            queueInfos.Add(new DeviceQueueCreateInfo() {
+                SType = StructureType.DeviceCreateInfo,
+                QueueCount = 1,
+                QueueFamilyIndex = transferQueueIndex,
+                PQueuePriorities = &priority
+            });
+        }
+
+        fixed (DeviceQueueCreateInfo* queues = queueInfos.ToArray()) {
+            DeviceCreateInfo deviceInfo = new() {
+                SType = StructureType.DeviceCreateInfo,
+                EnabledLayerCount = 0,
+                PpEnabledLayerNames = null,
+                EnabledExtensionCount = (uint)deviceExtensions.Count,
+                PpEnabledExtensionNames = (byte**)enabledExtensions,
+                QueueCreateInfoCount = (uint)queueInfos.Count,
+                PQueueCreateInfos = queues
+            };
+
+
+            if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
+                throw new Exception("Failed to create device");
+            }
+
+            _vk.GetDeviceQueue(_device, graphicsQueueIndex, 0, out graphicsQueue);
+            _vk.GetDeviceQueue(_device, transferQueueIndex, 0, out graphicsQueue);
+        }
     }
 
     public override void Draw(float deltaTime, float gameTime) {
@@ -191,6 +241,7 @@ public class VulkanRenderer : DatRenderer {
     }
 
     public override unsafe void Cleanup() {
+        _vk.DestroyDevice(_device, null);
         _extDebugUtils.Dispose();
         _vk.DestroyInstance(_instance, null);
         _vk.Dispose();
@@ -231,5 +282,78 @@ public class VulkanRenderer : DatRenderer {
         Logger.EngineLogger.Debug("Available validation layers extensions: {content}", availableLayers);
 
         return requestedLayers.TrueForAll((layer) => availableLayers.Contains(layer));
+    }
+
+    private unsafe void SelectQueues() {
+        uint queueFamilyCount = 0;
+        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, null);
+        var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
+        fixed (QueueFamilyProperties* queueFam = queueFamilies) {
+            _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, queueFam);
+        }
+
+        // Find Graphics queue
+        for (var i = 0u; i < queueFamilies.Length; i++) {
+            var properties = queueFamilies[i];
+
+            if (!properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) continue;
+            
+            graphicsQueueIndex = i;
+            break;
+        }
+        
+        // Find transfer queue
+        var tempTrans = -1;
+        for (var i = 0; i < queueFamilies.Length; i++) {
+            var properties = queueFamilies[i];
+
+            if (!properties.QueueFlags.HasFlag(QueueFlags.TransferBit)
+                || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
+                || properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) continue;
+            
+            tempTrans = i;
+            break;
+        }
+
+        // // If we can't find a dedicated transfer queue, just use the graphics queue
+        // transferQueueIndex = tempTrans != -1 ? (uint)tempTrans : graphicsQueueIndex;
+        //
+        // // Find Compute queue
+        // var tempComp = -1;
+        // for (var i = 0; i < queueFamilies.Length; i++) {
+        //     var properties = queueFamilies[i];
+        //
+        //     if (!properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)
+        //         || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
+        //         || properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) continue;
+        //     
+        //     tempComp = i;
+        //     break;
+        // }
+        //
+        // // If we can't find a dedicated compute queue, just use the graphics queue
+        // computeQueueIndex = tempComp != -1 ? (uint)tempComp : graphicsQueueIndex;
+    }
+
+    private unsafe void printQueues() {
+        uint queueFamilyCount = 0;
+        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, null);
+        var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
+        fixed (QueueFamilyProperties* queueFam = queueFamilies) {
+            _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, queueFam);
+        }
+        Logger.EngineLogger.Info("Queues: ");
+        for (var i = 0; i < queueFamilies.Length; i++) {
+            QueueFamilyProperties properties = queueFamilies[i];
+            StringBuilder message =
+                new StringBuilder().Append($"Index: {i}").Append($" | Count: {properties.QueueCount}");
+
+            if (properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) message.Append(" | Graphics");
+            if (properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) message.Append(" | Compute");
+            if (properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) message.Append(" | Transfer");
+            if (properties.QueueFlags.HasFlag(QueueFlags.ProtectedBit)) message.Append(" | Protected");
+            if (properties.QueueFlags.HasFlag(QueueFlags.SparseBindingBit)) message.Append(" | Sparse Binding");
+            Logger.EngineLogger.Info(message.ToString());
+        }
     }
 }
