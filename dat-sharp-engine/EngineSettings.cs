@@ -1,23 +1,23 @@
 using Silk.NET.SDL;
 
-namespace dat_sharp_engine; 
+namespace dat_sharp_engine;
 
 public class EngineSettings {
     /// <summary>
     /// The width of the game window
     /// </summary>
     public int width = 1280;
-    
+
     /// <summary>
     /// The height of the game window
     /// </summary>
     public int height = 720;
-    
+
     /// <summary>
     /// The display mode of the window
     /// </summary>
     public WindowMode windowMode = WindowMode.Windowed;
-    
+
     /// <summary>
     /// The gpu to use for rendering
     /// </summary>
@@ -25,10 +25,12 @@ public class EngineSettings {
 
     public bool vsync = false;
 
+    public readonly bool debug = true;
+
     /// <summary>
-    /// The minimum number of buffered frames in the swapchain
+    /// The desired number of buffered frames in the swapchain
     /// <para/>
-    /// Note this is the minimum, the driver may demand more
+    /// Note this is the desired value, the driver may restrict to more or less
     /// </summary>
     public uint bufferedFrames = 2;
 

@@ -1,7 +1,6 @@
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
-using System.Text;
 using dat_sharp_engine.Util;
-using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.SDL;
 using Silk.NET.Vulkan;
@@ -9,7 +8,7 @@ using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using VMASharp;
 
-namespace dat_sharp_engine.Rendering.Vulkan; 
+namespace dat_sharp_engine.Rendering.Vulkan;
 
 public class VulkanRenderer : DatRenderer {
     private readonly Vk _vk = Vk.GetApi();
@@ -19,20 +18,25 @@ public class VulkanRenderer : DatRenderer {
     private Instance _instance;
     private PhysicalDevice _physicalDevice;
     private Device _device;
-    
+
     // Memory
     private VulkanMemoryAllocator _allocator;
-    
-    // Queues
-    private uint _graphicsQueueIndex;    // Queue index for graphics stuff
-    private Queue _graphicsQueue;        // Queue for graphics stuff
-    private uint _transferQueueIndex;    // Queue index for transferring assets to the gpu
-    private Queue _transferQueue;        // Queue for transferring assets to the gpu
 
+    // Queues
+    private uint _graphicsQueueIndex; // Queue index for graphics stuff
+    private Queue _graphicsQueue; // Queue for graphics stuff
+    private uint _transferQueueIndex; // Queue index for transferring assets to the gpu
+    private Queue _transferQueue; // Queue for transferring assets to the gpu
+
+    private KhrSurface _khrSurface;
     private SurfaceKHR _surface;
-    
+
+    private KhrSwapchain _khrSwapchain;
+    private uint framesInFlight = 0;
+    private FrameData[] _frameData;
+
     // Debug
-    private ExtDebugUtils _extDebugUtils;
+    private ExtDebugUtils? _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
 
     public VulkanRenderer(DatSharpEngine datSharpEngine) : base(datSharpEngine) {
@@ -46,16 +50,17 @@ public class VulkanRenderer : DatRenderer {
     /* --------------------------------------- */
     /* Initialisation                          */
     /* --------------------------------------- */
-    
+
     public override void Initialise() {
         Logger.EngineLogger.Info("Initialising Vulkan");
+
         InitialiseVulkanInstance();
         InitialiseVulkanPhysicalDevice();
         SelectQueues();
         InitialiseVulkanDevice();
         InitialiseVma();
         InitialiseSurface();
-        InitialiseSwapchain();
+        InitialiseFrameData();
     }
 
     /// <summary>
@@ -71,18 +76,13 @@ public class VulkanRenderer : DatRenderer {
 
         var extensions = GetInstanceExtensions();
 
-        var layers = new List<string> {
-            "VK_LAYER_KHRONOS_validation",
-            "VK_LAYER_RENDERDOC_Capture",
-            "VK_LAYER_LUNARG_monitor",
-            "VK_LAYER_MANGOAPP_overlay"
-        };
-        
-        Logger.EngineLogger.Debug("Selected instance extensions: {content}", extensions);
+        ISet<string> layers;
+        if (_datSharpEngine.engineSettings.debug) {
+            layers = GetValidationLayers();
 
-        if (!CheckValidationLayerSupport(layers)) {
-            throw new Exception("Requested validation layers were missing");
-        }
+            Logger.EngineLogger.Debug("Selected instance extensions: {content}", extensions);
+        } else layers = ImmutableHashSet<string>.Empty;
+
 
         var engineName = SilkMarshal.StringToPtr("DatSharpEngine");
         var applicationName = SilkMarshal.StringToPtr(_datSharpEngine.appSettings.name);
@@ -92,23 +92,16 @@ public class VulkanRenderer : DatRenderer {
             ApiVersion = Vk.Version13,
             EngineVersion = Vk.MakeVersion(EngineConstants.ENGINE_VERSION.Major,
                 EngineConstants.ENGINE_VERSION.Minor,
-                EngineConstants.ENGINE_VERSION.Patch),
+                EngineConstants.ENGINE_VERSION.Patch
+            ),
             ApplicationVersion = Vk.MakeVersion(_datSharpEngine.appSettings.version.Major,
                 _datSharpEngine.appSettings.version.Minor,
-                _datSharpEngine.appSettings.version.Patch),
-            PEngineName = (byte*)engineName,
-            PApplicationName = (byte*)applicationName
+                _datSharpEngine.appSettings.version.Patch
+            ),
+            PEngineName = (byte*) engineName,
+            PApplicationName = (byte*) applicationName
         };
 
-        DebugUtilsMessengerCreateInfoEXT debugInfo = new() {
-            SType = StructureType.DebugUtilsMessengerCreateInfoExt,
-            MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt |
-                              DebugUtilsMessageSeverityFlagsEXT.WarningBitExt,
-            MessageType = DebugUtilsMessageTypeFlagsEXT.ValidationBitExt |
-                          DebugUtilsMessageTypeFlagsEXT.PerformanceBitExt |
-                          DebugUtilsMessageTypeFlagsEXT.DeviceAddressBindingBitExt,
-            PfnUserCallback = (DebugUtilsMessengerCallbackFunctionEXT)VulkanDebugCallback
-        };
 
         // Vulkan requires these as C Arrays
         var enabledLayers = SilkMarshal.StringArrayToPtr(layers.ToArray());
@@ -117,13 +110,27 @@ public class VulkanRenderer : DatRenderer {
         InstanceCreateInfo instanceInfo = new() {
             SType = StructureType.InstanceCreateInfo,
             Flags = InstanceCreateFlags.None,
-            EnabledLayerCount = (uint)layers.Count,
-            PpEnabledLayerNames = (byte**)enabledLayers,
-            EnabledExtensionCount = (uint)extensions.Count,
-            PpEnabledExtensionNames = (byte**)enabledExtensions,
+            EnabledLayerCount = (uint) layers.Count,
+            PpEnabledLayerNames = (byte**) enabledLayers,
+            EnabledExtensionCount = (uint) extensions.Count,
+            PpEnabledExtensionNames = (byte**) enabledExtensions,
             PApplicationInfo = &appInfo,
-            PNext = &debugInfo
         };
+
+        // We gotta dance this around so it may be included in the instance info and createDebug
+        DebugUtilsMessengerCreateInfoEXT debugInfo = new() {
+            SType = StructureType.DebugUtilsMessengerCreateInfoExt,
+            MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt |
+                              DebugUtilsMessageSeverityFlagsEXT.WarningBitExt,
+            MessageType = DebugUtilsMessageTypeFlagsEXT.ValidationBitExt |
+                          DebugUtilsMessageTypeFlagsEXT.PerformanceBitExt |
+                          DebugUtilsMessageTypeFlagsEXT.DeviceAddressBindingBitExt,
+            PfnUserCallback = (DebugUtilsMessengerCallbackFunctionEXT) VulkanDebugCallback
+        };
+
+        if (_datSharpEngine.engineSettings.debug) {
+            instanceInfo.PNext = &debugInfo;
+        }
 
         var result = _vk.CreateInstance(instanceInfo, null, out _instance);
 
@@ -136,11 +143,14 @@ public class VulkanRenderer : DatRenderer {
         if (result != Result.Success) {
             throw new Exception("Failed to initialise vulkan");
         }
-        
+
         // Setup debug stuff
-        if(!_vk.TryGetInstanceExtension(_instance, out _extDebugUtils))
+        if (!_datSharpEngine.engineSettings.debug) return;
+
+        if (!_vk.TryGetInstanceExtension(_instance, out _extDebugUtils))
             throw new Exception($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
-        _extDebugUtils.CreateDebugUtilsMessenger(_instance, debugInfo, null, out _debugUtilsMessenger);
+
+        _extDebugUtils!.CreateDebugUtilsMessenger(_instance, debugInfo, null, out _debugUtilsMessenger);
     }
 
     /// <summary>
@@ -150,22 +160,38 @@ public class VulkanRenderer : DatRenderer {
     /// <exception cref="Exception">
     /// Thrown when the engine fails to get the required instance extensions from SDL
     /// </exception>
-    private unsafe List<string> GetInstanceExtensions() {
-        var extensions = new List<string> {
-            ExtDebugUtils.ExtensionName
+    private unsafe ISet<string> GetInstanceExtensions() {
+        var extensions = new HashSet<string> {
+            ExtDebugUtils.ExtensionName,
+            KhrSurface.ExtensionName
         };
-        
+
         uint pCount = 0;
-        _sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, (byte**)null);
+        _sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, (byte**) null);
 
         var names = new string[pCount];
 
         if (_sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, names) != SdlBool.True) {
             throw new Exception("Failed to get required instance extensions");
         }
-        
-        extensions.AddRange(names);
+
+        extensions.UnionWith(names);
         return extensions;
+    }
+
+    private ISet<string> GetValidationLayers() {
+        var layers = new HashSet<string> {
+            "VK_LAYER_KHRONOS_validation",
+            "VK_LAYER_RENDERDOC_Capture",
+            "VK_LAYER_LUNARG_monitor",
+            "VK_LAYER_MANGOAPP_overlay"
+        };
+
+        if (!CheckValidationLayerSupport(layers)) {
+            throw new Exception("Requested validation layers were missing");
+        }
+
+        return layers;
     }
 
     /// <summary>
@@ -173,73 +199,69 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     private unsafe void InitialiseVulkanPhysicalDevice() {
         Logger.EngineLogger.Debug("Selecting GPU for Vulkan");
-        
+
         // Select a gpu
         // TODO: Better selection method
         var devices = _vk.GetPhysicalDevices(_instance);
-        foreach (var gpu in devices)
-        {
+        foreach (var gpu in devices) {
             var properties = _vk.GetPhysicalDeviceProperties(gpu);
             if (_datSharpEngine.engineSettings.gpu.HasValue &&
                 properties.DeviceID == _datSharpEngine.engineSettings.gpu) {
                 _physicalDevice = gpu;
                 break;
             }
+
             if (properties.DeviceType == PhysicalDeviceType.DiscreteGpu) _physicalDevice = gpu;
         }
+
         if (_physicalDevice.Handle == 0) _physicalDevice = devices.First();
-        
+
         var deviceProps = _vk.GetPhysicalDeviceProperties(_physicalDevice);
         Logger.EngineLogger.Info("Selected GPU: {}", SilkMarshal.PtrToString((nint) deviceProps.DeviceName));
-        
+
         // TODO: Save selection
     }
 
     /// <summary>
     /// Select the queues for the engine to use
     /// </summary>
-    private unsafe void SelectQueues() {
-        uint queueFamilyCount = 0;
-        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, null);
-        var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
-        fixed (QueueFamilyProperties* queueFam = queueFamilies) {
-            _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, ref queueFamilyCount, queueFam);
-        }
+    private void SelectQueues() {
+        var queueFamilies = VkHelper.GetQueueFamilyProperties(_vk, _physicalDevice);
 
         // Find Graphics queue
-        for (var i = 0u; i < queueFamilies.Length; i++) {
+        for (var i = 0; i < queueFamilies.Count; i++) {
             var properties = queueFamilies[i];
 
             if (!properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) continue;
-            
-            _graphicsQueueIndex = i;
+
+            _graphicsQueueIndex = (uint) i;
             break;
         }
-        
-        Logger.EngineLogger.Debug("Selected Graphics Queue: {}", 
-            GetQueueDescription((int) _graphicsQueueIndex, queueFamilies[_graphicsQueueIndex])
+
+        Logger.EngineLogger.Debug("Selected Graphics Queue: {}",
+            VkHelper.GetQueueDescription((int) _graphicsQueueIndex, queueFamilies[(int) _graphicsQueueIndex])
         );
-        
+
         // Find transfer queue
         var tempTrans = -1;
-        for (var i = 0; i < queueFamilies.Length; i++) {
+        for (var i = 0; i < queueFamilies.Count; i++) {
             var properties = queueFamilies[i];
 
             if (!properties.QueueFlags.HasFlag(QueueFlags.TransferBit)
                 || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
                 || properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) continue;
-            
+
             tempTrans = i;
             break;
         }
 
         // If we can't find a dedicated transfer queue, just use the graphics queue
-        _transferQueueIndex = tempTrans != -1 ? (uint)tempTrans : _graphicsQueueIndex;
-        
-        Logger.EngineLogger.Debug("Selected Transfer Queue: {}", 
-            GetQueueDescription((int) _transferQueueIndex, queueFamilies[_transferQueueIndex])
+        _transferQueueIndex = tempTrans != -1 ? (uint) tempTrans : _graphicsQueueIndex;
+
+        Logger.EngineLogger.Debug("Selected Transfer Queue: {}",
+            VkHelper.GetQueueDescription((int) _transferQueueIndex, queueFamilies[(int) _transferQueueIndex])
         );
-        
+
         // // Find Compute queue
         // var tempComp = -1;
         // for (var i = 0; i < queueFamilies.Length; i++) {
@@ -248,7 +270,7 @@ public class VulkanRenderer : DatRenderer {
         //     if (!properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)
         //         || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
         //         || properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) continue;
-        //     
+        //
         //     tempComp = i;
         //     break;
         // }
@@ -256,7 +278,7 @@ public class VulkanRenderer : DatRenderer {
         // // If we can't find a dedicated compute queue, just use the graphics queue
         // _computeQueueIndex = tempComp != -1 ? (uint)tempComp : graphicsQueueIndex;
         //
-        // Logger.EngineLogger.Debug("Selected Compute Queue: {}", 
+        // Logger.EngineLogger.Debug("Selected Compute Queue: {}",
         //     GetQueueDescription((int) _computeQueueIndex, queueFamilies[_computeQueueIndex])
         // );
     }
@@ -267,6 +289,7 @@ public class VulkanRenderer : DatRenderer {
     /// <exception cref="Exception">Thrown when creating the physical device fails</exception>
     private unsafe void InitialiseVulkanDevice() {
         Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
+
         var deviceExtensions = new List<string> {
             KhrSwapchain.ExtensionName
         };
@@ -275,7 +298,7 @@ public class VulkanRenderer : DatRenderer {
 
         var priority = 1.0f;
         List<DeviceQueueCreateInfo> queueInfos = new() {
-            new DeviceQueueCreateInfo() {
+            new DeviceQueueCreateInfo {
                 SType = StructureType.DeviceQueueCreateInfo,
                 QueueCount = 1,
                 QueueFamilyIndex = _graphicsQueueIndex,
@@ -285,27 +308,28 @@ public class VulkanRenderer : DatRenderer {
 
         // Make sure we only request 1 queue if the transfer and graphics queues are the same
         if (_transferQueueIndex != _graphicsQueueIndex) {
-            queueInfos.Add(new DeviceQueueCreateInfo() {
-                SType = StructureType.DeviceQueueCreateInfo,
-                QueueCount = 1,
-                QueueFamilyIndex = _transferQueueIndex,
-                PQueuePriorities = &priority
-            });
+            queueInfos.Add(new DeviceQueueCreateInfo {
+                    SType = StructureType.DeviceQueueCreateInfo,
+                    QueueCount = 1,
+                    QueueFamilyIndex = _transferQueueIndex,
+                    PQueuePriorities = &priority
+                }
+            );
         }
 
         // Toggle on features
-        PhysicalDeviceFeatures features = new PhysicalDeviceFeatures() {
+        var features = new PhysicalDeviceFeatures {
             FillModeNonSolid = Vk.True
         };
-        
+
         // Device features that require setup via PNext
         // (This would have been in it's own function but memory management needs to be handled in silly ways for garbage
         // collection reasons)
-        var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures() {
+        var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures {
             SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
             ShaderDrawParameters = true
         };
-        var vulkan13Features = new PhysicalDeviceVulkan13Features() {
+        var vulkan13Features = new PhysicalDeviceVulkan13Features {
             SType = StructureType.PhysicalDeviceVulkan13Features,
             DynamicRendering = true,
             Synchronization2 = true,
@@ -317,14 +341,14 @@ public class VulkanRenderer : DatRenderer {
                 SType = StructureType.DeviceCreateInfo,
                 EnabledLayerCount = 0,
                 PpEnabledLayerNames = null,
-                EnabledExtensionCount = (uint)deviceExtensions.Count,
-                PpEnabledExtensionNames = (byte**)enabledExtensions,
-                QueueCreateInfoCount = (uint)queueInfos.Count,
+                EnabledExtensionCount = (uint) deviceExtensions.Count,
+                PpEnabledExtensionNames = (byte**) enabledExtensions,
+                QueueCreateInfoCount = (uint) queueInfos.Count,
                 PQueueCreateInfos = queues,
                 PEnabledFeatures = &features,
                 PNext = &vulkan13Features
             };
-            
+
             if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
                 throw new Exception("Failed to create device");
             }
@@ -338,6 +362,8 @@ public class VulkanRenderer : DatRenderer {
     /// Initialise the memory allocator
     /// </summary>
     private void InitialiseVma() {
+        Logger.EngineLogger.Debug("Initialising Vulkan Memory Allocator");
+
         VulkanMemoryAllocatorCreateInfo vmaCreateInfo = new() {
             VulkanAPIObject = _vk,
             Instance = _instance,
@@ -350,12 +376,43 @@ public class VulkanRenderer : DatRenderer {
     }
 
     private unsafe void InitialiseSurface() {
+        Logger.EngineLogger.Debug("Initialising Vulkan Surface");
+
+        if (!_vk.TryGetInstanceExtension(_instance, out _khrSurface)) {
+            throw new Exception($"Could not get Instance extension {KhrSurface.ExtensionName}");
+        }
+
         VkNonDispatchableHandle handle;
         _sdl.VulkanCreateSurface(_datSharpEngine.window, _instance.ToHandle(), &handle);
         _surface = handle.ToSurface();
     }
 
+    private void InitialiseFrameData() {
+        InitialiseSwapchain();
+    }
+
     private void InitialiseSwapchain() {
+        Logger.EngineLogger.Debug("Initialising Swapchain");
+
+        if (!_vk.TryGetDeviceExtension(_instance, _device, out _khrSwapchain)) {
+            throw new Exception($"Could not get device extension {KhrSwapchain.ExtensionName}");
+        }
+
+        if (_khrSurface.GetPhysicalDeviceSurfaceCapabilities(_physicalDevice,
+                _surface,
+                out var surfaceCapabilities
+            ) != Result.Success) {
+            throw new Exception("Failed to get surface capabilities");
+        }
+
+        framesInFlight = Math.Clamp(_datSharpEngine.engineSettings.bufferedFrames,
+            surfaceCapabilities.MinImageCount,
+            surfaceCapabilities.MaxImageCount
+        );
+
+        if (_khrSwapchain.GetDeviceGroupPresentCapabilities(_device, out var presentCapabilities) != Result.Success) {
+            throw new Exception("Failed to get present capabilities");
+        }
     }
 
     public override void Draw(float deltaTime, float gameTime) {
@@ -363,15 +420,24 @@ public class VulkanRenderer : DatRenderer {
     }
 
     public override unsafe void Cleanup() {
+        _khrSwapchain.Dispose();
+
+        _khrSurface.DestroySurface(_instance, _surface, null);
+        _khrSurface.Dispose();
+
         _allocator.Dispose();
+
         _vk.DestroyDevice(_device, null);
-        _extDebugUtils.Dispose();
+
+        // May be null if not debug
+        _extDebugUtils?.DestroyDebugUtilsMessenger(_instance, _debugUtilsMessenger, null);
+        _extDebugUtils?.Dispose();
+
         _vk.DestroyInstance(_instance, null);
         _vk.Dispose();
     }
-    
-    
-    
+
+
     /* --------------------------------------- */
     /* Debug                                   */
     /* --------------------------------------- */
@@ -388,71 +454,26 @@ public class VulkanRenderer : DatRenderer {
         DebugUtilsMessageTypeFlagsEXT messageTypeFlags,
         DebugUtilsMessengerCallbackDataEXT* pCallbackData,
         void* pUserData) {
-        var message = Marshal.PtrToStringUTF8((nint)pCallbackData->PMessage);
+        var message = Marshal.PtrToStringUTF8((nint) pCallbackData->PMessage);
         Logger.EngineLogger.Warn("Vulkan | {} | {}", severityFlags, message);
-        
+
         return Vk.False;
     }
-    
+
     /* --------------------------------------- */
     /* Util                                    */
     /* --------------------------------------- */
-    
+
     /// <summary>
     /// Check the device supports the requested validation layers
     /// </summary>
     /// <param name="requestedLayers">A list of the layers the engine wants to use</param>
     /// <returns>True if the device has all of the requested layers available</returns>
-    private unsafe bool CheckValidationLayerSupport(List<string> requestedLayers) {
-        List<String> availableLayers;
-        {
-            uint layerCount = 0;
-            _vk.EnumerateInstanceLayerProperties(ref layerCount, null);
-            var properties = new LayerProperties[layerCount];
-            fixed (LayerProperties* @props = properties) {
-                _vk.EnumerateInstanceLayerProperties(ref layerCount, @props);
-            }
+    private bool CheckValidationLayerSupport(IEnumerable<string> requestedLayers) {
+        var availableLayers = VkHelper.GetAvailableValidationLayers(_vk);
 
-            availableLayers = properties.Select((prop) => Marshal.PtrToStringUTF8((IntPtr)prop.LayerName)).ToList()!;
-        }
-        
         Logger.EngineLogger.Trace("Available validation layers extensions: {content}", availableLayers);
 
-        return requestedLayers.TrueForAll((layer) => availableLayers.Contains(layer));
-    }
-    
-    /// <summary>
-    /// Print the definitions of each queue on the given device
-    /// </summary>
-    /// <param name="physicalDevice">The device to get the queues of</param>
-    private unsafe void PrintQueues(PhysicalDevice physicalDevice) {
-        uint queueFamilyCount = 0;
-        _vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, ref queueFamilyCount, null);
-        var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
-        fixed (QueueFamilyProperties* queueFam = queueFamilies) {
-            _vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, ref queueFamilyCount, queueFam);
-        }
-        Logger.EngineLogger.Info("Queues: ");
-        for (var i = 0; i < queueFamilies.Length; i++) {
-            Logger.EngineLogger.Info(GetQueueDescription(i, queueFamilies[i]));
-        }
-    }
-
-    /// <summary>
-    /// Get a string description of the given queue
-    /// </summary>
-    /// <param name="queueIndex">The index of the queue</param>
-    /// <param name="properties">The properties of the queue</param>
-    /// <returns>A string description of the queue</returns>
-    private static string GetQueueDescription(int queueIndex, QueueFamilyProperties properties) {
-        StringBuilder message =
-            new StringBuilder().Append($"Index: {queueIndex}").Append($" | Count: {properties.QueueCount}");
-
-        if (properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) message.Append(" | Graphics");
-        if (properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) message.Append(" | Compute");
-        if (properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) message.Append(" | Transfer");
-        if (properties.QueueFlags.HasFlag(QueueFlags.ProtectedBit)) message.Append(" | Protected");
-        if (properties.QueueFlags.HasFlag(QueueFlags.SparseBindingBit)) message.Append(" | Sparse Binding");
-        return message.ToString();
+        return requestedLayers.All(layer => availableLayers.Contains(layer));
     }
 }
