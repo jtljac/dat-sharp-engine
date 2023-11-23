@@ -32,8 +32,9 @@ public class VulkanRenderer : DatRenderer {
     private SurfaceKHR _surface;
 
     private KhrSwapchain _khrSwapchain;
-    private uint framesInFlight = 0;
     private FrameData[] _frameData;
+    private SwapchainKHR _swapchain;
+    private Format _swapchainFormat;
 
     // Debug
     private ExtDebugUtils? _extDebugUtils;
@@ -375,6 +376,10 @@ public class VulkanRenderer : DatRenderer {
         _allocator = new VulkanMemoryAllocator(vmaCreateInfo);
     }
 
+    /// <summary>
+    /// Initialise the surface API and Surface
+    /// </summary>
+    /// <exception cref="Exception">Thrown when the KHRSurface API fails to be acquired</exception>
     private unsafe void InitialiseSurface() {
         Logger.EngineLogger.Debug("Initialising Vulkan Surface");
 
@@ -391,7 +396,13 @@ public class VulkanRenderer : DatRenderer {
         InitialiseSwapchain();
     }
 
-    private void InitialiseSwapchain() {
+    /// <summary>
+    /// Initialise the swapchain api and swapchain
+    /// </summary>
+    /// <exception cref="Exception">
+    /// Thrown when the Swapchain API is unavailable, or the swapchain fails to be created
+    /// </exception>
+    private unsafe void InitialiseSwapchain() {
         Logger.EngineLogger.Debug("Initialising Swapchain");
 
         if (!_vk.TryGetDeviceExtension(_instance, _device, out _khrSwapchain)) {
@@ -405,14 +416,74 @@ public class VulkanRenderer : DatRenderer {
             throw new Exception("Failed to get surface capabilities");
         }
 
-        framesInFlight = Math.Clamp(_datSharpEngine.engineSettings.bufferedFrames,
+        var imageCount = Math.Clamp(_datSharpEngine.engineSettings.bufferedFrames,
             surfaceCapabilities.MinImageCount,
             surfaceCapabilities.MaxImageCount
         );
 
-        if (_khrSwapchain.GetDeviceGroupPresentCapabilities(_device, out var presentCapabilities) != Result.Success) {
-            throw new Exception("Failed to get present capabilities");
+        var swapchainFormat = GetPreferredSwapchainFormat();
+        var presentMode = GetPreferredPresentMode();
+        var extent = new Extent2D(
+            Math.Clamp((uint) _datSharpEngine.engineSettings.width,
+                surfaceCapabilities.MinImageExtent.Width,
+                surfaceCapabilities.MaxImageExtent.Width
+            ),
+            Math.Clamp((uint) _datSharpEngine.engineSettings.height,
+                surfaceCapabilities.MinImageExtent.Height,
+                surfaceCapabilities.MaxImageExtent.Height
+            )
+        );
+
+        SwapchainCreateInfoKHR swapchainInfo = new() {
+            SType = StructureType.SwapchainCreateInfoKhr,
+            Surface = _surface,
+            Clipped = true,
+            CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
+            PreTransform = surfaceCapabilities.CurrentTransform,
+            MinImageCount = imageCount,
+            ImageFormat = swapchainFormat.Format,
+            ImageColorSpace = swapchainFormat.ColorSpace,
+            ImageExtent = extent,
+            PresentMode = presentMode,
+            ImageArrayLayers = 1,
+            ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+            ImageSharingMode = SharingMode.Exclusive,
+            QueueFamilyIndexCount = 0,
+            PQueueFamilyIndices = null
+        };
+
+        if (_khrSwapchain.CreateSwapchain(_device, &swapchainInfo, null, out _swapchain) != Result.Success) {
+            throw new Exception("Failed to create swapchain");
         }
+
+        // _khrSwapchain.GetSwapchainImages()
+    }
+
+    /// <summary>
+    /// Get the preferred surface format for the swapchain
+    /// </summary>
+    /// <returns>The preferred surface format for the swapchain</returns>
+    private SurfaceFormatKHR GetPreferredSwapchainFormat() {
+        var supportedFormats = VkHelper.GetDeviceSurfaceFormats(_khrSurface, _physicalDevice, _surface);
+        return supportedFormats
+            .Where(format => format is { Format: Format.B8G8R8Srgb, ColorSpace: ColorSpaceKHR.SpaceSrgbNonlinearKhr })
+            .FirstOrDefault(supportedFormats[0]);
+    }
+
+    /// <summary>
+    /// Get the preferred present mode for the swapchain
+    /// <para/>
+    /// This uses the <see cref="EngineSettings.vsync"/> engine setting
+    /// </summary>
+    /// <returns>The preferred present mode</returns>
+    private PresentModeKHR GetPreferredPresentMode() {
+        var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface, _physicalDevice, _surface);
+
+        var options = _datSharpEngine.engineSettings.vsync
+            ? new[] { PresentModeKHR.MailboxKhr, PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr }
+            : new[] { PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr };
+
+        return options.First(option => formats.Contains(option));
     }
 
     public override void Draw(float deltaTime, float gameTime) {

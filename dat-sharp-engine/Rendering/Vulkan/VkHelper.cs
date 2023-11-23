@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using dat_sharp_engine.Util;
 using Silk.NET.Vulkan;
+using Silk.NET.Vulkan.Extensions.KHR;
 
 namespace dat_sharp_engine.Rendering.Vulkan;
 
@@ -24,6 +25,60 @@ public static class VkHelper {
             array =>
                 array.Select((prop) => Marshal.PtrToStringUTF8((IntPtr) prop.LayerName)).ToHashSet()
         )!;
+    }
+
+    /* --------------------------------------- */
+    /* Surface                                 */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Get the available surface formats for the given surface and device
+    /// </summary>
+    /// <param name="khrSurface">An instance of the KHRSurface API to use for querying the driver</param>
+    /// <param name="physicalDevice">The Physical device to query</param>
+    /// <param name="surface">The surface being queried for</param>
+    /// <returns>The available surface formats</returns>
+    public static unsafe List<SurfaceFormatKHR> GetDeviceSurfaceFormats(KhrSurface khrSurface,
+        PhysicalDevice physicalDevice,
+        SurfaceKHR surface) {
+        return GetVulkanList(
+            (ref uint count, SurfaceFormatKHR* list) =>
+                khrSurface.GetPhysicalDeviceSurfaceFormats(physicalDevice, surface, ref count, list)
+        );
+    }
+
+    /// <summary>
+    /// Get The available present modes for the given device and surface
+    /// </summary>
+    /// <param name="khrSurface">An instance of the KHRSurface API to use for querying the driver</param>
+    /// <param name="physicalDevice">The Physical device to query</param>
+    /// <param name="surface">The surface being queried for</param>
+    /// <returns>The available present modes</returns>
+    public static unsafe List<PresentModeKHR> GetDeviceSurfacePresentModes(KhrSurface khrSurface,
+        PhysicalDevice physicalDevice,
+        SurfaceKHR surface) {
+        return GetVulkanList((ref uint count, PresentModeKHR* list) =>
+            khrSurface.GetPhysicalDeviceSurfacePresentModes(physicalDevice, surface, ref count, list)
+        );
+    }
+
+    /* --------------------------------------- */
+    /* Swapchain                               */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Get the swapchain images for the given swapchain
+    /// </summary>
+    /// <param name="khrSwapchain">An instance of the KHRSwapchain APU to use for querying the driver</param>
+    /// <param name="device">The device to query</param>
+    /// <param name="swapchain">The swapchain that owns the images</param>
+    /// <returns>A list of swapchain images</returns>
+    public static unsafe List<Image> GetSwapchainImages(KhrSwapchain khrSwapchain,
+        Device device,
+        SwapchainKHR swapchain) {
+        return GetVulkanList((ref uint count, Image* list) =>
+            khrSwapchain.GetSwapchainImages(device, swapchain, ref count, list)
+        );
     }
 
     /* --------------------------------------- */
@@ -67,7 +122,7 @@ public static class VkHelper {
     /// </summary>
     /// <param name="vk">The instance of the Vk API</param>
     /// <param name="physicalDevice">The device to get the queues of</param>
-    private static void PrintQueues(ref Vk vk, ref PhysicalDevice physicalDevice) {
+    public static void PrintQueues(Vk vk, PhysicalDevice physicalDevice) {
         var queueFamilies = GetQueueFamilyProperties(vk, physicalDevice);
 
         Logger.EngineLogger.Info("Queues: ");
