@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net7.0</TargetFramework>
+        <TargetFramework>net8.0</TargetFramework>
         <RootNamespace>dat_sharp_engine</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -28,7 +28,6 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Alimer.Bindings.SDL-main\src\Alimer.Bindings.SDL\Alimer.Bindings.SDL.csproj" />
       <ProjectReference Include="..\ThirdParty\VMAsharp\VMASharp\VMASharp.csproj" />
     </ItemGroup>
 
