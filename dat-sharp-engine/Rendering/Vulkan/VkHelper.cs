@@ -7,6 +7,9 @@ using Silk.NET.Vulkan.Extensions.KHR;
 
 namespace dat_sharp_engine.Rendering.Vulkan;
 
+/// <summary>
+/// A class containing methods for simplifying some annoying vulkan calls
+/// </summary>
 public static class VkHelper {
 
     /* --------------------------------------- */
@@ -23,7 +26,10 @@ public static class VkHelper {
             (ref uint count, LayerProperties* list) =>
                 vk.EnumerateInstanceLayerProperties(ref count, list),
             array =>
-                array.Select((prop) => Marshal.PtrToStringUTF8((IntPtr) prop.LayerName)).ToHashSet()
+                array.Select(prop => {
+                    // ReSharper disable once ConvertToLambdaExpression
+                    return Marshal.PtrToStringUTF8((IntPtr) prop.LayerName);
+                }).ToHashSet()
         )!;
     }
 
@@ -132,6 +138,73 @@ public static class VkHelper {
     }
 
     /* --------------------------------------- */
+    /* Image                                   */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Add an image transition to the given command buffer
+    /// </summary>
+    ///
+    /// <param name="vk">The instance of the Vk API</param>
+    /// <param name="commandBuffer">The command buffer to add the image transition to</param>
+    /// <param name="image">The image to transition</param>
+    /// <param name="currentLayout">The current layout of the image</param>
+    /// <param name="newLayout">The layout to transition the image to</param>
+    /// <param name="srcStage">The stage to wait on for the transition</param>
+    /// <param name="destStage">The stage to execute the transition on</param>
+    /// <param name="srcAccessMask"></param>
+    /// <param name="destAccessMask"></param>
+    public static unsafe void TransitionImage(Vk vk,
+        CommandBuffer commandBuffer,
+        Image image,
+        ImageLayout currentLayout,
+        ImageLayout newLayout,
+        PipelineStageFlags2 srcStage = PipelineStageFlags2.AllCommandsBit,
+        PipelineStageFlags2 destStage = PipelineStageFlags2.AllCommandsBit,
+        AccessFlags2 srcAccessMask = AccessFlags2.MemoryWriteBit,
+        AccessFlags2 destAccessMask = AccessFlags2.MemoryWriteBit | AccessFlags2.MemoryReadBit) {
+        var memoryBarrier2 = new ImageMemoryBarrier2 {
+            SType = StructureType.ImageMemoryBarrier2,
+            SrcStageMask = srcStage,
+            SrcAccessMask = srcAccessMask,
+            DstStageMask = destStage,
+            DstAccessMask = destAccessMask,
+
+            OldLayout = currentLayout,
+            NewLayout = newLayout,
+
+            SubresourceRange = VkShortcuts.CreateImageSubresourceRange(newLayout == ImageLayout.DepthAttachmentOptimal
+                ? ImageAspectFlags.DepthBit
+                : ImageAspectFlags.ColorBit),
+
+            Image = image
+        };
+
+        var dependencyInfo = new DependencyInfo {
+            SType = StructureType.DependencyInfo,
+            ImageMemoryBarrierCount = 1,
+            PImageMemoryBarriers = &memoryBarrier2
+        };
+
+        vk.CmdPipelineBarrier2(commandBuffer, dependencyInfo);
+    }
+
+    public static unsafe void TransitionImages(Vk vk,
+        CommandBuffer commandBuffer,
+        ref ImageMemoryBarrier2[] imageMemoryBarriers) {
+
+        fixed (ImageMemoryBarrier2* memoryBarriers = imageMemoryBarriers) {
+            var dependencyInfo = new DependencyInfo {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = (uint) imageMemoryBarriers.Length,
+                PImageMemoryBarriers = memoryBarriers
+            };
+
+            vk.CmdPipelineBarrier2(commandBuffer, dependencyInfo);
+        }
+    }
+
+    /* --------------------------------------- */
     /* Util                                    */
     /* --------------------------------------- */
 
@@ -139,7 +212,7 @@ public static class VkHelper {
     /// A delegate representing a vulkan enumerate method
     /// </summary>
     /// <typeparam name="T">The Value being enumerated by the vulkan method</typeparam>
-    private unsafe delegate Result VulkanListFunction<T>(ref uint count, T* pList);
+    private unsafe delegate Result VulkanListFunction<T>(ref uint count, T* pList) where T : unmanaged;
 
     /// <summary>
     /// Get the contents of a vulkan enumerate method
@@ -149,7 +222,7 @@ public static class VkHelper {
     /// <typeparam name="TParam">The type of the Vulkan object being enumerated</typeparam>
     /// <typeparam name="TReturn">The return type</typeparam>
     /// <returns>The result of the Vulkan enumerate method in the transformed format</returns>
-    private static unsafe TReturn GetVulkanList<TParam, TReturn>(VulkanListFunction<TParam> method, Func<TParam[], TReturn> resultTransformer) where TReturn : IEnumerable {
+    private static unsafe TReturn GetVulkanList<TParam, TReturn>(VulkanListFunction<TParam> method, Func<TParam[], TReturn> resultTransformer) where TReturn : IEnumerable where TParam : unmanaged {
         uint count = 0;
         method.Invoke(ref count, null);
         var list = new TParam[count];
@@ -166,7 +239,7 @@ public static class VkHelper {
     /// <param name="method">A wrapper for the Vulkan method that enumerates</param>
     /// <typeparam name="T">The type of the Vulkan object being enumerated</typeparam>
     /// <returns>The result of the Vulkan enumerate method in a list</returns>
-    private static List<T> GetVulkanList<T>(VulkanListFunction<T> method) {
+    private static List<T> GetVulkanList<T>(VulkanListFunction<T> method) where T : unmanaged {
         return GetVulkanList(method, arg => new List<T>(arg));
     }
 }

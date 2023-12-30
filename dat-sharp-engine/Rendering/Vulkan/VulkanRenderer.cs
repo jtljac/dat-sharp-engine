@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using dat_sharp_engine.Rendering.Util;
 using dat_sharp_engine.Util;
 using Silk.NET.Core.Native;
 using Silk.NET.SDL;
@@ -7,9 +8,13 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using VMASharp;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace dat_sharp_engine.Rendering.Vulkan;
 
+/// <summary>
+/// A renderer implementation using the Vulkan API
+/// </summary>
 public class VulkanRenderer : DatRenderer {
     private readonly Vk _vk = Vk.GetApi();
     private readonly Sdl _sdl;
@@ -20,7 +25,7 @@ public class VulkanRenderer : DatRenderer {
     private Device _device;
 
     // Memory
-    private VulkanMemoryAllocator _allocator;
+    private VulkanMemoryAllocator? _allocator;
 
     // Queues
     private uint _graphicsQueueIndex; // Queue index for graphics stuff
@@ -28,13 +33,17 @@ public class VulkanRenderer : DatRenderer {
     private uint _transferQueueIndex; // Queue index for transferring assets to the gpu
     private Queue _transferQueue; // Queue for transferring assets to the gpu
 
-    private KhrSurface _khrSurface;
+    // Surface
+    private KhrSurface? _khrSurface;
     private SurfaceKHR _surface;
 
-    private KhrSwapchain _khrSwapchain;
-    private FrameData[] _frameData;
+    // Swapchain
+    private KhrSwapchain? _khrSwapchain;
     private SwapchainKHR _swapchain;
     private Format _swapchainFormat;
+    private SwapchainData[] _swapchainData;
+    private FrameData[] _frameData;
+    private uint _currentFrame = 0;
 
     // Debug
     private ExtDebugUtils? _extDebugUtils;
@@ -61,18 +70,20 @@ public class VulkanRenderer : DatRenderer {
         InitialiseVulkanDevice();
         InitialiseVma();
         InitialiseSurface();
+        InitialiseSwapchain();
+        InitialiseSwapchainImages();
         InitialiseFrameData();
     }
 
     /// <summary>
     /// Initialise the vulkan instance and debug validation layers
     /// </summary>
-    /// <exception cref="Exception">Thrown when the instance fails to initialise</exception>
+    /// <exception cref="DatRendererInitialisationException">Thrown when the instance fails to initialise</exception>
     private unsafe void InitialiseVulkanInstance() {
         Logger.EngineLogger.Debug("Initialising Vulkan instance");
 
         // if (_sdl.VulkanLoadLibrary() < 0) {
-        //     throw new Exception("Failed to load vulkan library");
+        //     throw new DatRendererInitialisationException("Failed to load vulkan library");
         // }
 
         var extensions = GetInstanceExtensions();
@@ -142,14 +153,14 @@ public class VulkanRenderer : DatRenderer {
         SilkMarshal.Free(applicationName);
 
         if (result != Result.Success) {
-            throw new Exception("Failed to initialise vulkan");
+            throw new DatRendererInitialisationException("Failed to initialise vulkan");
         }
 
         // Setup debug stuff
         if (!_datSharpEngine.engineSettings.debug) return;
 
         if (!_vk.TryGetInstanceExtension(_instance, out _extDebugUtils))
-            throw new Exception($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
+            throw new DatRendererInitialisationException($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
 
         _extDebugUtils!.CreateDebugUtilsMessenger(_instance, debugInfo, null, out _debugUtilsMessenger);
     }
@@ -158,7 +169,7 @@ public class VulkanRenderer : DatRenderer {
     /// Get the required instance extensions
     /// </summary>
     /// <returns>A list of instance extensions to use</returns>
-    /// <exception cref="Exception">
+    /// <exception cref="DatRendererInitialisationException">
     /// Thrown when the engine fails to get the required instance extensions from SDL
     /// </exception>
     private unsafe ISet<string> GetInstanceExtensions() {
@@ -173,7 +184,7 @@ public class VulkanRenderer : DatRenderer {
         var names = new string[pCount];
 
         if (_sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, names) != SdlBool.True) {
-            throw new Exception("Failed to get required instance extensions");
+            throw new DatRendererInitialisationException("Failed to get required instance extensions");
         }
 
         extensions.UnionWith(names);
@@ -189,7 +200,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (!CheckValidationLayerSupport(layers)) {
-            throw new Exception("Requested validation layers were missing");
+            throw new DatRendererInitialisationException("Requested validation layers were missing");
         }
 
         return layers;
@@ -287,7 +298,7 @@ public class VulkanRenderer : DatRenderer {
     /// <summary>
     /// Initialise the logical device
     /// </summary>
-    /// <exception cref="Exception">Thrown when creating the physical device fails</exception>
+    /// <exception cref="DatRendererInitialisationException">Thrown when creating the physical device fails</exception>
     private unsafe void InitialiseVulkanDevice() {
         Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
 
@@ -351,7 +362,7 @@ public class VulkanRenderer : DatRenderer {
             };
 
             if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
-                throw new Exception("Failed to create device");
+                throw new DatRendererInitialisationException("Failed to create device");
             }
 
             _vk.GetDeviceQueue(_device, _graphicsQueueIndex, 0, out _graphicsQueue);
@@ -379,12 +390,12 @@ public class VulkanRenderer : DatRenderer {
     /// <summary>
     /// Initialise the surface API and Surface
     /// </summary>
-    /// <exception cref="Exception">Thrown when the KHRSurface API fails to be acquired</exception>
+    /// <exception cref="DatRendererInitialisationException">Thrown when the KHRSurface API fails to be acquired</exception>
     private unsafe void InitialiseSurface() {
         Logger.EngineLogger.Debug("Initialising Vulkan Surface");
 
         if (!_vk.TryGetInstanceExtension(_instance, out _khrSurface)) {
-            throw new Exception($"Could not get Instance extension {KhrSurface.ExtensionName}");
+            throw new DatRendererInitialisationException($"Could not get Instance extension {KhrSurface.ExtensionName}");
         }
 
         VkNonDispatchableHandle handle;
@@ -392,33 +403,29 @@ public class VulkanRenderer : DatRenderer {
         _surface = handle.ToSurface();
     }
 
-    private void InitialiseFrameData() {
-        InitialiseSwapchain();
-    }
-
     /// <summary>
     /// Initialise the swapchain api and swapchain
     /// </summary>
-    /// <exception cref="Exception">
+    /// <exception cref="DatRendererInitialisationException">
     /// Thrown when the Swapchain API is unavailable, or the swapchain fails to be created
     /// </exception>
     private unsafe void InitialiseSwapchain() {
         Logger.EngineLogger.Debug("Initialising Swapchain");
 
         if (!_vk.TryGetDeviceExtension(_instance, _device, out _khrSwapchain)) {
-            throw new Exception($"Could not get device extension {KhrSwapchain.ExtensionName}");
+            throw new DatRendererInitialisationException($"Could not get device extension {KhrSwapchain.ExtensionName}");
         }
 
-        if (_khrSurface.GetPhysicalDeviceSurfaceCapabilities(_physicalDevice,
+        if (_khrSurface!.GetPhysicalDeviceSurfaceCapabilities(_physicalDevice,
                 _surface,
                 out var surfaceCapabilities
             ) != Result.Success) {
-            throw new Exception("Failed to get surface capabilities");
+            throw new DatRendererInitialisationException("Failed to get surface capabilities");
         }
 
         var imageCount = Math.Clamp(_datSharpEngine.engineSettings.bufferedFrames,
             surfaceCapabilities.MinImageCount,
-            surfaceCapabilities.MaxImageCount
+            surfaceCapabilities.MaxImageCount == 0 ? uint.MaxValue : surfaceCapabilities.MaxImageCount
         );
 
         var swapchainFormat = GetPreferredSwapchainFormat();
@@ -446,17 +453,118 @@ public class VulkanRenderer : DatRenderer {
             ImageExtent = extent,
             PresentMode = presentMode,
             ImageArrayLayers = 1,
-            ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+            ImageUsage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit,
             ImageSharingMode = SharingMode.Exclusive,
             QueueFamilyIndexCount = 0,
             PQueueFamilyIndices = null
         };
 
-        if (_khrSwapchain.CreateSwapchain(_device, &swapchainInfo, null, out _swapchain) != Result.Success) {
-            throw new Exception("Failed to create swapchain");
+        if (_khrSwapchain!.CreateSwapchain(_device, swapchainInfo, null, out _swapchain) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create swapchain");
         }
 
-        // _khrSwapchain.GetSwapchainImages()
+        _swapchainFormat = swapchainFormat.Format;
+    }
+
+    private unsafe void InitialiseSwapchainImages() {
+        Logger.EngineLogger.Debug("Initialising Swapchain Images");
+
+        var swapchainImages = VkHelper.GetSwapchainImages(_khrSwapchain!, _device, _swapchain);
+        _swapchainData = new SwapchainData[swapchainImages.Count];
+
+        for (var i = 0; i < swapchainImages.Count; i++) {
+            var swapchainData = _swapchainData[i] = new SwapchainData();
+            var swapchainImage = swapchainImages[i];
+
+            swapchainData.image = swapchainImage;
+
+            ImageViewCreateInfo imageViewInfo = new() {
+                SType = StructureType.ImageViewCreateInfo,
+                Image = swapchainImage,
+                ViewType = ImageViewType.Type2D,
+                Format = _swapchainFormat,
+                Components = {
+                    R = ComponentSwizzle.Identity,
+                    G = ComponentSwizzle.Identity,
+                    B = ComponentSwizzle.Identity,
+                    A = ComponentSwizzle.Identity
+                },
+                SubresourceRange = {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                }
+            };
+
+            if (_vk.CreateImageView(_device, imageViewInfo, null, out swapchainData.imageView) != Result.Success) {
+                throw new DatRendererInitialisationException($"Failed to create swapchain imageView");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Setup the data used each frame
+    /// </summary>
+    private void InitialiseFrameData() {
+        Logger.EngineLogger.Debug("Initialising Framedata");
+
+        _frameData = new FrameData[_datSharpEngine.engineSettings.bufferedFrames].Select(_ => new FrameData()).ToArray();
+
+        foreach (var frameData in _frameData) {
+            InitialiseFrameCommands(frameData);
+            InitialiseSyncStructures(frameData);
+        }
+    }
+
+    /// <summary>
+    /// Setup the command structure for the given frame
+    /// </summary>
+    /// <param name="frameData">The frame being setup</param>
+    /// <exception cref="DatRendererInitialisationException">
+    /// Thrown when Vulkan fails to create any of the command structures
+    /// </exception>
+    private unsafe void InitialiseFrameCommands(FrameData frameData) {
+        CommandPoolCreateInfo commandPoolInfo = new() {
+            SType = StructureType.CommandPoolCreateInfo,
+            Flags = CommandPoolCreateFlags.ResetCommandBufferBit,
+            QueueFamilyIndex = _graphicsQueueIndex
+        };
+
+        if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out frameData.commandPool) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create swapchain command pool");
+        }
+
+        var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(frameData.commandPool, 1);
+
+        if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out frameData.commandBuffer) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create swapchain command buffer");
+        }
+    }
+
+    /// <summary>
+    /// Setup the synchronisation structures for the given frame
+    /// </summary>
+    /// <param name="frameData">The frame being setup</param>
+    /// <exception cref="DatRendererInitialisationException">
+    /// Thrown when vulkan fails to create any of the synchronisation structures
+    /// </exception>
+    private unsafe void InitialiseSyncStructures(FrameData frameData) {
+        var fenceInfo = VkShortcuts.CreateFenceCreateInfo(FenceCreateFlags.SignaledBit);
+        var semaphoreInfo = VkShortcuts.CreateSemaphoreCreateInfo();
+
+        if (_vk.CreateFence(_device, fenceInfo, null, out frameData.renderFence) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create frame render fence");
+        }
+
+        if (_vk.CreateSemaphore(_device, semaphoreInfo, null, out frameData.swapchainSemaphore) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create frame swapchain semaphore");
+        }
+
+        if (_vk.CreateSemaphore(_device, semaphoreInfo, null, out frameData.renderSemaphore) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create frame render semaphore");
+        }
     }
 
     /// <summary>
@@ -464,7 +572,7 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     /// <returns>The preferred surface format for the swapchain</returns>
     private SurfaceFormatKHR GetPreferredSwapchainFormat() {
-        var supportedFormats = VkHelper.GetDeviceSurfaceFormats(_khrSurface, _physicalDevice, _surface);
+        var supportedFormats = VkHelper.GetDeviceSurfaceFormats(_khrSurface!, _physicalDevice, _surface);
         return supportedFormats
             .Where(format => format is { Format: Format.B8G8R8Srgb, ColorSpace: ColorSpaceKHR.SpaceSrgbNonlinearKhr })
             .FirstOrDefault(supportedFormats[0]);
@@ -477,30 +585,137 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     /// <returns>The preferred present mode</returns>
     private PresentModeKHR GetPreferredPresentMode() {
-        var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface, _physicalDevice, _surface);
+        var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
 
-        var options = _datSharpEngine.engineSettings.vsync
-            ? new[] { PresentModeKHR.MailboxKhr, PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr }
-            : new[] { PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr };
+        PresentModeKHR[] options = _datSharpEngine.engineSettings.vsync
+            ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
+            : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
 
         return options.First(option => formats.Contains(option));
     }
 
-    public override void Draw(float deltaTime, float gameTime) {
-        // Console.WriteLine(gameTime);
+    public override unsafe void Draw(float deltaTime, float gameTime) {
+        Logger.EngineLogger.Debug(deltaTime);
+        var currentFrameData = GetCurrentFrameData();
+
+        _vk.WaitForFences(_device, 1, currentFrameData.renderFence, true, 1000000000);
+        _vk.ResetFences(_device, 1, currentFrameData.renderFence);
+
+        uint imageIndex = 0;
+        // TODO: Handle out of date
+        _khrSwapchain!.AcquireNextImage(_device,
+            _swapchain,
+            1000000000,
+            currentFrameData.swapchainSemaphore,
+            new Fence(null),
+            ref imageIndex
+        );
+
+        var swapchainData = _swapchainData[imageIndex];
+
+        _vk.ResetCommandBuffer(currentFrameData.commandBuffer, CommandBufferResetFlags.None);
+        var commandBeginInfo = VkShortcuts.CreateCommandBufferBeginInfo(CommandBufferUsageFlags.OneTimeSubmitBit);
+        _vk.BeginCommandBuffer(currentFrameData.commandBuffer, commandBeginInfo);
+
+        // Clear colour
+        VkHelper.TransitionImage(_vk,
+            currentFrameData.commandBuffer,
+            swapchainData.image,
+            ImageLayout.Undefined,
+            ImageLayout.General,
+            PipelineStageFlags2.TopOfPipeBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            0,
+            AccessFlags2.ShaderWriteBit
+        );
+
+        var flash = (float) Math.Abs(Math.Sin(_currentFrame / 120.0));
+        var clearColorValue = new ClearColorValue {
+            Float32_0 = 0.0f,
+            Float32_1 = 0.0f,
+            Float32_2 = flash,
+            Float32_3 = 1.0f
+        };
+
+        _vk.CmdClearColorImage(
+            currentFrameData.commandBuffer,
+            swapchainData.image,
+            ImageLayout.General,
+            clearColorValue,
+            1,
+            VkShortcuts.CreateImageSubresourceRange(ImageAspectFlags.ColorBit)
+        );
+
+        // Transition to present
+        VkHelper.TransitionImage(_vk,
+            currentFrameData.commandBuffer,
+            swapchainData.image,
+            ImageLayout.General,
+            ImageLayout.PresentSrcKhr,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            AccessFlags2.MemoryWriteBit,
+            AccessFlags2.MemoryReadBit);
+
+        _vk.EndCommandBuffer(currentFrameData.commandBuffer);
+
+        // Submit Queue
+        var cmdInfo = VkShortcuts.CommandBufferSubmitInfo(currentFrameData.commandBuffer);
+        var waitInfo = VkShortcuts.CreateSemaphoreSubmitInfo(PipelineStageFlags2.ColorAttachmentOutputBit,
+            currentFrameData.swapchainSemaphore
+        );
+        var signalInfo = VkShortcuts.CreateSemaphoreSubmitInfo(PipelineStageFlags2.AllGraphicsBit,
+            currentFrameData.renderSemaphore
+        );
+
+        _vk.QueueSubmit2(_graphicsQueue,
+            1,
+            VkShortcuts.SubmitInfo(&cmdInfo, &signalInfo, &waitInfo),
+            currentFrameData.renderFence
+        );
+
+        fixed (SwapchainKHR* swapchain = &_swapchain)
+        fixed (Semaphore* waitSemaphore = &currentFrameData.renderSemaphore) {
+            // Present
+            var presentInfo = new PresentInfoKHR {
+                SType = StructureType.PresentInfoKhr,
+                SwapchainCount = 1,
+                PSwapchains = swapchain,
+
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = waitSemaphore,
+
+                PImageIndices = &imageIndex
+            };
+
+            _khrSwapchain!.QueuePresent(_graphicsQueue, presentInfo);
+        }
+
+        ++_currentFrame;
     }
 
     public override unsafe void Cleanup() {
-        _khrSwapchain.Dispose();
+        _vk.DeviceWaitIdle(_device);
 
-        _khrSurface.DestroySurface(_instance, _surface, null);
-        _khrSurface.Dispose();
+        foreach (ref var frameData in _frameData.AsSpan()) {
+            _vk.DestroySemaphore(_device, frameData.renderSemaphore, null);
+            _vk.DestroySemaphore(_device, frameData.swapchainSemaphore, null);
+            _vk.DestroyFence(_device, frameData.renderFence, null);
+            _vk.DestroyCommandPool(_device, frameData.commandPool, null);
+        }
 
-        _allocator.Dispose();
+        foreach (ref var swapchainData in _swapchainData.AsSpan()) {
+            _vk.DestroyImageView(_device, swapchainData.imageView, null);
+        }
+        _khrSwapchain?.Dispose();
+
+        _khrSurface?.DestroySurface(_instance, _surface, null);
+        _khrSurface?.Dispose();
+
+        _allocator?.Dispose();
 
         _vk.DestroyDevice(_device, null);
 
-        // May be null if not debug
         _extDebugUtils?.DestroyDebugUtilsMessenger(_instance, _debugUtilsMessenger, null);
         _extDebugUtils?.Dispose();
 
@@ -543,8 +758,17 @@ public class VulkanRenderer : DatRenderer {
     private bool CheckValidationLayerSupport(IEnumerable<string> requestedLayers) {
         var availableLayers = VkHelper.GetAvailableValidationLayers(_vk);
 
-        Logger.EngineLogger.Trace("Available validation layers extensions: {content}", availableLayers);
+        Logger.EngineLogger.Debug("Available validation layers extensions: {content}", availableLayers);
 
         return requestedLayers.All(layer => availableLayers.Contains(layer));
+    }
+
+    /// <summary>
+    /// Get the frame data for the current frame<br/>
+    /// Note this uses <see cref="_currentFrame"/>
+    /// </summary>
+    /// <returns>The frame data for the current frame</returns>
+    private FrameData GetCurrentFrameData() {
+        return _frameData[_currentFrame % _datSharpEngine.engineSettings.bufferedFrames];
     }
 }
