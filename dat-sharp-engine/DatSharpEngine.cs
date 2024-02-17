@@ -31,8 +31,8 @@ public class DatSharpEngine {
             window = sdl.CreateWindow(appSettings.name,
                 Sdl.WindowposUndefined,
                 Sdl.WindowposUndefined,
-                engineSettings.width,
-                engineSettings.height,
+                (int) engineSettings.width,
+                (int) engineSettings.height,
                 (uint)(engineSettings.getWindowFlags() | renderer.GetWindowFlags()));
 
             if (window == null) {

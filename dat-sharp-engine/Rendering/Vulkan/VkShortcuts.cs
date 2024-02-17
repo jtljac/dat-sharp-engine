@@ -60,7 +60,7 @@ public static class VkShortcuts {
     ///
     /// <param name="commandBuffer">The command buffer being submitted</param>
     /// <returns>A populated CommandBufferSubmitInfo</returns>
-    public static CommandBufferSubmitInfo CommandBufferSubmitInfo(CommandBuffer commandBuffer) {
+    public static CommandBufferSubmitInfo CreateCommandBufferSubmitInfo(CommandBuffer commandBuffer) {
         return new CommandBufferSubmitInfo {
             SType = StructureType.CommandBufferSubmitInfo,
             CommandBuffer = commandBuffer,
@@ -131,7 +131,14 @@ public static class VkShortcuts {
     /* Queue                                   */
     /* --------------------------------------- */
 
-    public static unsafe SubmitInfo2 SubmitInfo(CommandBufferSubmitInfo* cmdSubmitInfo,
+    /// <summary>
+    /// Create a SubmitInfo2
+    /// </summary>
+    /// <param name="cmdSubmitInfo">A pointer to a CommandBufferSubmitInfo</param>
+    /// <param name="signalSemaphoreInfo">A pointer to a SignalSemaphoreInfo</param>
+    /// <param name="waitSemaphoreInfo">A pointer to a WaitSemaphoreInfo</param>
+    /// <returns>A populated SubmitInfo2</returns>
+    public static unsafe SubmitInfo2 CreateSubmitInfo(CommandBufferSubmitInfo* cmdSubmitInfo,
         SemaphoreSubmitInfo* signalSemaphoreInfo,
         SemaphoreSubmitInfo* waitSemaphoreInfo) {
         return new SubmitInfo2 {
@@ -147,7 +154,62 @@ public static class VkShortcuts {
             PCommandBufferInfos = cmdSubmitInfo
         };
     }
+    
+    /* --------------------------------------- */
+    /* Image                                   */
+    /* --------------------------------------- */
 
+    /// <summary>
+    /// Create an ImageCreateInfo
+    /// </summary>
+    /// <param name="format">The format of the image</param>
+    /// <param name="usageFlags">The usage flags for the image</param>
+    /// <param name="extent">The 3d extent of the image</param>
+    /// <returns>A populated ImageCreateInfo</returns>
+    public static ImageCreateInfo CreateImageCreateInfo(Format format, ImageUsageFlags usageFlags, Extent3D extent) {
+        return new ImageCreateInfo {
+            SType = StructureType.ImageCreateInfo,
+            
+            ImageType = ImageType.Type2D,
+            
+            Format = format,
+            Extent = extent,
+
+            MipLevels = 1,
+            ArrayLayers = 1,
+
+            Samples = SampleCountFlags.Count1Bit,
+
+            Tiling = ImageTiling.Optimal,
+            Usage = usageFlags
+        };
+    }
+
+    /// <summary>
+    /// Create an ImageViewCreateInfo
+    /// </summary>
+    /// <param name="format">The format of the image</param>
+    /// <param name="image">The image the imageview is for</param>
+    /// <param name="aspectFlags">The aspect flags of the image</param>
+    /// <returns></returns>
+    public static ImageViewCreateInfo CreateImageViewCreateInfo(Format format, Image image, ImageAspectFlags aspectFlags) {
+        return new ImageViewCreateInfo {
+            SType = StructureType.ImageViewCreateInfo,
+
+            ViewType = ImageViewType.Type2D,
+            Image = image,
+            Format = format,
+
+            SubresourceRange = new ImageSubresourceRange {
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1,
+                AspectMask = aspectFlags
+            }
+        };
+    }
+    
     /* --------------------------------------- */
     /* Misc                                    */
     /* --------------------------------------- */

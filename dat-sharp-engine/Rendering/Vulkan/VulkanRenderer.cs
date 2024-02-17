@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using dat_sharp_engine.Rendering.Util;
+using dat_sharp_engine.Rendering.Vulkan.Descriptor;
 using dat_sharp_engine.Util;
 using Silk.NET.Core.Native;
 using Silk.NET.SDL;
@@ -41,9 +42,24 @@ public class VulkanRenderer : DatRenderer {
     private KhrSwapchain? _khrSwapchain;
     private SwapchainKHR _swapchain;
     private Format _swapchainFormat;
+    private Extent2D _swapchainExtent;
     private SwapchainData[] _swapchainData;
     private FrameData[] _frameData;
     private uint _currentFrame = 0;
+
+    // Frame Resources
+    private AllocatedImage _drawImage;
+    private Extent2D _drawExtent;
+    
+    // Descriptors
+    private DescriptorAllocator _globalDescriptorAllocator;
+
+    private DescriptorSet _drawImageDescriptor;
+    private DescriptorSetLayout _drawImageDescriptorLayout;
+
+    // Pipelines
+    private Pipeline _gradientPipeline;
+    private PipelineLayout _gradientPipelineLayout;
 
     // Debug
     private ExtDebugUtils? _extDebugUtils;
@@ -73,6 +89,9 @@ public class VulkanRenderer : DatRenderer {
         InitialiseSwapchain();
         InitialiseSwapchainImages();
         InitialiseFrameData();
+        InitialiseFrameImages();
+        InitialiseDescriptors();
+        InitialisePipelines();
     }
 
     /// <summary>
@@ -194,7 +213,6 @@ public class VulkanRenderer : DatRenderer {
     private ISet<string> GetValidationLayers() {
         var layers = new HashSet<string> {
             "VK_LAYER_KHRONOS_validation",
-            "VK_LAYER_RENDERDOC_Capture",
             "VK_LAYER_LUNARG_monitor",
             "VK_LAYER_MANGOAPP_overlay"
         };
@@ -341,11 +359,18 @@ public class VulkanRenderer : DatRenderer {
             SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
             ShaderDrawParameters = true
         };
+
+        var vulkan12Features = new PhysicalDeviceVulkan12Features {
+            SType = StructureType.PhysicalDeviceVulkan12Features,
+            BufferDeviceAddress = true,
+            DescriptorIndexing = true,
+            PNext = &drawParametersFeatures
+        };
         var vulkan13Features = new PhysicalDeviceVulkan13Features {
             SType = StructureType.PhysicalDeviceVulkan13Features,
             DynamicRendering = true,
             Synchronization2 = true,
-            PNext = &drawParametersFeatures
+            PNext = &vulkan12Features
         };
 
         fixed (DeviceQueueCreateInfo* queues = queueInfos.ToArray()) {
@@ -381,7 +406,8 @@ public class VulkanRenderer : DatRenderer {
             Instance = _instance,
             PhysicalDevice = _physicalDevice,
             LogicalDevice = _device,
-            VulkanAPIVersion = Vk.Version13
+            VulkanAPIVersion = Vk.Version13,
+            Flags = AllocatorCreateFlags.BufferDeviceAddress
         };
 
         _allocator = new VulkanMemoryAllocator(vmaCreateInfo);
@@ -464,6 +490,7 @@ public class VulkanRenderer : DatRenderer {
         }
 
         _swapchainFormat = swapchainFormat.Format;
+        _swapchainExtent = extent;
     }
 
     private unsafe void InitialiseSwapchainImages() {
@@ -514,7 +541,7 @@ public class VulkanRenderer : DatRenderer {
 
         foreach (var frameData in _frameData) {
             InitialiseFrameCommands(frameData);
-            InitialiseSyncStructures(frameData);
+            InitialiseFrameSyncStructures(frameData);
         }
     }
 
@@ -550,7 +577,7 @@ public class VulkanRenderer : DatRenderer {
     /// <exception cref="DatRendererInitialisationException">
     /// Thrown when vulkan fails to create any of the synchronisation structures
     /// </exception>
-    private unsafe void InitialiseSyncStructures(FrameData frameData) {
+    private unsafe void InitialiseFrameSyncStructures(FrameData frameData) {
         var fenceInfo = VkShortcuts.CreateFenceCreateInfo(FenceCreateFlags.SignaledBit);
         var semaphoreInfo = VkShortcuts.CreateSemaphoreCreateInfo();
 
@@ -565,6 +592,116 @@ public class VulkanRenderer : DatRenderer {
         if (_vk.CreateSemaphore(_device, semaphoreInfo, null, out frameData.renderSemaphore) != Result.Success) {
             throw new DatRendererInitialisationException("Failed to create frame render semaphore");
         }
+    }
+
+    private unsafe void InitialiseFrameImages() {
+        Logger.EngineLogger.Debug("Initialising Frame Images");
+        var drawImageExtent = new Extent3D(_datSharpEngine.engineSettings.width, _datSharpEngine.engineSettings.height, 1);
+
+        const Format format = Format.R16G16B16A16Sfloat;
+
+        const ImageUsageFlags usageFlags = ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit |
+                                           ImageUsageFlags.StorageBit | ImageUsageFlags.ColorAttachmentBit;
+
+        var imageInfo = VkShortcuts.CreateImageCreateInfo(format, usageFlags, drawImageExtent);
+
+        var allocationInfo = new AllocationCreateInfo {
+            Usage = MemoryUsage.GPU_Only,
+            RequiredFlags = MemoryPropertyFlags.DeviceLocalBit
+        };
+
+        var image = _allocator!.CreateImage(imageInfo, allocationInfo, out var allocation);
+
+        var imageViewInfo =
+            VkShortcuts.CreateImageViewCreateInfo(format, image, ImageAspectFlags.ColorBit);
+
+        if (_vk.CreateImageView(_device, imageViewInfo, null, out var imageView) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create render image view");
+        }
+
+        _drawImage = new AllocatedImage(image, imageView, allocation, drawImageExtent, format);
+        _drawExtent = new Extent2D(drawImageExtent.Width, drawImageExtent.Height);
+    }
+
+    private unsafe void InitialiseDescriptors() {
+        Logger.EngineLogger.Debug("Initialising Descriptors");
+        DescriptorAllocator.PoolSizeRatio[] sizes = [
+            new DescriptorAllocator.PoolSizeRatio(DescriptorType.StorageImage, 1)
+        ];
+        
+        _globalDescriptorAllocator = new DescriptorAllocator(_vk, _device);
+        _globalDescriptorAllocator.InitPool(10, sizes);
+
+        _drawImageDescriptorLayout = new DescriptorLayoutBuilder()
+            .AddBinding(0, DescriptorType.StorageImage)
+            .Build(_vk, _device, ShaderStageFlags.ComputeBit);
+
+        _drawImageDescriptor = _globalDescriptorAllocator.Allocate(_drawImageDescriptorLayout);
+
+        var imageInfo = new DescriptorImageInfo {
+            ImageLayout = ImageLayout.General,
+            ImageView = _drawImage.imageView
+        };
+
+        var drawImageWrite = new WriteDescriptorSet {
+            SType = StructureType.WriteDescriptorSet,
+
+            DstBinding = 0,
+            DstSet = _drawImageDescriptor,
+            DescriptorCount = 1,
+            DescriptorType = DescriptorType.StorageImage,
+            PImageInfo = &imageInfo
+        };
+
+        _vk.UpdateDescriptorSets(_device, 1, &drawImageWrite, 0, null);
+    }
+
+    void InitialisePipelines() {
+        Logger.EngineLogger.Debug("Initialising Pipelines");
+        InitialiseBackgroundPipelines();
+    }
+
+    private unsafe void InitialiseBackgroundPipelines() {
+        fixed (DescriptorSetLayout* setLayout = &_drawImageDescriptorLayout) {
+            PipelineLayoutCreateInfo computeLayout = new PipelineLayoutCreateInfo {
+                SType = StructureType.PipelineLayoutCreateInfo,
+                SetLayoutCount = 1,
+                PSetLayouts = setLayout
+            };
+
+            if (_vk.CreatePipelineLayout(_device, computeLayout, null, out _gradientPipelineLayout) != Result.Success) {
+                throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+            }
+        }
+
+        var computeDrawShader = VkHelper.LoadShaderModel(_vk,
+            _device,
+            "/home/jacob/Projects/Dotnet/dat-sharp-engine/dat-sharp-engine/Assets/Shaders/comp.spv"
+        );
+
+        const string entryPoint = "main";
+        var pEntryPoint = (byte*)Marshal.StringToHGlobalAnsi(entryPoint);
+
+        var stageInfo = new PipelineShaderStageCreateInfo {
+            SType = StructureType.PipelineShaderStageCreateInfo,
+            Stage = ShaderStageFlags.ComputeBit,
+            Module = computeDrawShader,
+            PName = pEntryPoint
+        };
+
+        var computePipelineInfo = new ComputePipelineCreateInfo {
+            SType = StructureType.ComputePipelineCreateInfo,
+
+            Layout = _gradientPipelineLayout,
+            Stage = stageInfo
+        };
+
+        if (_vk.CreateComputePipelines(_device, default, 1, computePipelineInfo, null, out _gradientPipeline) != Result.Success) {
+            Marshal.Release((IntPtr) pEntryPoint);
+            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+        }
+
+        _vk.DestroyShaderModule(_device, computeDrawShader, null);
     }
 
     /// <summary>
@@ -620,7 +757,7 @@ public class VulkanRenderer : DatRenderer {
         // Clear colour
         VkHelper.TransitionImage(_vk,
             currentFrameData.commandBuffer,
-            swapchainData.image,
+            _drawImage.image,
             ImageLayout.Undefined,
             ImageLayout.General,
             PipelineStageFlags2.TopOfPipeBit,
@@ -629,38 +766,51 @@ public class VulkanRenderer : DatRenderer {
             AccessFlags2.ShaderWriteBit
         );
 
-        var flash = (float) Math.Abs(Math.Sin(_currentFrame / 120.0));
-        var clearColorValue = new ClearColorValue {
-            Float32_0 = 0.0f,
-            Float32_1 = 0.0f,
-            Float32_2 = flash,
-            Float32_3 = 1.0f
-        };
+        DrawBackground(currentFrameData);
 
-        _vk.CmdClearColorImage(
-            currentFrameData.commandBuffer,
-            swapchainData.image,
-            ImageLayout.General,
-            clearColorValue,
-            1,
-            VkShortcuts.CreateImageSubresourceRange(ImageAspectFlags.ColorBit)
-        );
-
-        // Transition to present
+        // Transition draw and swapchain images for transfer
         VkHelper.TransitionImage(_vk,
             currentFrameData.commandBuffer,
-            swapchainData.image,
+            _drawImage.image,
             ImageLayout.General,
-            ImageLayout.PresentSrcKhr,
+            ImageLayout.TransferSrcOptimal,
             PipelineStageFlags2.ColorAttachmentOutputBit,
             PipelineStageFlags2.ColorAttachmentOutputBit,
             AccessFlags2.MemoryWriteBit,
             AccessFlags2.MemoryReadBit);
 
+        VkHelper.TransitionImage(_vk,
+            currentFrameData.commandBuffer,
+            swapchainData.image,
+            ImageLayout.Undefined,
+            ImageLayout.TransferDstOptimal,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            AccessFlags2.None,
+            AccessFlags2.MemoryWriteBit);
+
+        VkHelper.CopyImageToImage(_vk,
+            currentFrameData.commandBuffer,
+            _drawImage.image,
+            swapchainData.image,
+            _drawExtent,
+            _swapchainExtent
+        );
+
+        VkHelper.TransitionImage(_vk,
+            currentFrameData.commandBuffer,
+            swapchainData.image,
+            ImageLayout.TransferDstOptimal,
+            ImageLayout.PresentSrcKhr,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            AccessFlags2.MemoryWriteBit,
+            AccessFlags2.MemoryWriteBit);
+
         _vk.EndCommandBuffer(currentFrameData.commandBuffer);
 
         // Submit Queue
-        var cmdInfo = VkShortcuts.CommandBufferSubmitInfo(currentFrameData.commandBuffer);
+        var cmdInfo = VkShortcuts.CreateCommandBufferSubmitInfo(currentFrameData.commandBuffer);
         var waitInfo = VkShortcuts.CreateSemaphoreSubmitInfo(PipelineStageFlags2.ColorAttachmentOutputBit,
             currentFrameData.swapchainSemaphore
         );
@@ -670,7 +820,7 @@ public class VulkanRenderer : DatRenderer {
 
         _vk.QueueSubmit2(_graphicsQueue,
             1,
-            VkShortcuts.SubmitInfo(&cmdInfo, &signalInfo, &waitInfo),
+            VkShortcuts.CreateSubmitInfo(&cmdInfo, &signalInfo, &waitInfo),
             currentFrameData.renderFence
         );
 
@@ -694,17 +844,44 @@ public class VulkanRenderer : DatRenderer {
         ++_currentFrame;
     }
 
+    private unsafe void DrawBackground(FrameData currentFrameData) {
+        _vk.CmdBindPipeline(currentFrameData.commandBuffer, PipelineBindPoint.Compute, _gradientPipeline);
+
+        var drawImageDescriptor = _drawImageDescriptor;
+        _vk.CmdBindDescriptorSets(currentFrameData.commandBuffer,
+            PipelineBindPoint.Compute,
+            _gradientPipelineLayout,
+            0,
+            1,
+            &drawImageDescriptor,
+            null
+        );
+
+        _vk.CmdDispatch(currentFrameData.commandBuffer,
+            (uint) Math.Ceiling(_drawExtent.Width / 16.0),
+            (uint) Math.Ceiling(_drawExtent.Height / 16.0),
+            1
+        );
+    }
+
     public override unsafe void Cleanup() {
         _vk.DeviceWaitIdle(_device);
 
-        foreach (ref var frameData in _frameData.AsSpan()) {
+        _vk.DestroyPipeline(_device, _gradientPipeline, null);
+        _vk.DestroyPipelineLayout(_device, _gradientPipelineLayout, null);
+
+        _vk.DestroyImageView(_device, _drawImage.imageView, null);
+        _vk.DestroyImage(_device, _drawImage.image, null);
+        _allocator!.FreeMemory(_drawImage.allocation);
+
+        foreach (var frameData in _frameData) {
             _vk.DestroySemaphore(_device, frameData.renderSemaphore, null);
             _vk.DestroySemaphore(_device, frameData.swapchainSemaphore, null);
             _vk.DestroyFence(_device, frameData.renderFence, null);
             _vk.DestroyCommandPool(_device, frameData.commandPool, null);
         }
 
-        foreach (ref var swapchainData in _swapchainData.AsSpan()) {
+        foreach (var swapchainData in _swapchainData) {
             _vk.DestroyImageView(_device, swapchainData.imageView, null);
         }
         _khrSwapchain?.Dispose();

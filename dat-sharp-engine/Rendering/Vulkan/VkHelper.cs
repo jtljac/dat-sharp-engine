@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Runtime.InteropServices;
 using System.Text;
+using dat_sharp_engine.Rendering.Util;
 using dat_sharp_engine.Util;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
@@ -189,6 +190,12 @@ public static class VkHelper {
         vk.CmdPipelineBarrier2(commandBuffer, dependencyInfo);
     }
 
+    /// <summary>
+    /// Add multiple transitions to the given command buffer
+    /// </summary>
+    /// <param name="vk">The instance of the Vk API</param>
+    /// <param name="commandBuffer">The command buffer to add the image transition to</param>
+    /// <param name="imageMemoryBarriers">An array of image memory barriers to queue together</param>
     public static unsafe void TransitionImages(Vk vk,
         CommandBuffer commandBuffer,
         ref ImageMemoryBarrier2[] imageMemoryBarriers) {
@@ -201,6 +208,77 @@ public static class VkHelper {
             };
 
             vk.CmdPipelineBarrier2(commandBuffer, dependencyInfo);
+        }
+    }
+
+    /// <summary>
+    /// Copy an image onto another
+    /// </summary>
+    /// <param name="vk">The instance of the Vk API</param>
+    /// <param name="commandBuffer">The command buffer to add the image transition to</param>
+    /// <param name="source">The source image to copy from</param>
+    /// <param name="destination">The destination image to copy to</param>
+    /// <param name="srcSize">The size of the image being copied from</param>
+    /// <param name="dstSize">The size of the image being copied to</param>
+    public static unsafe void CopyImageToImage(Vk vk, CommandBuffer commandBuffer,
+        Image source, Image destination,
+        Extent2D srcSize, Extent2D dstSize) {
+        var blitRegion = new ImageBlit2 {
+            SType = StructureType.ImageBlit2
+        };
+
+        blitRegion.SrcOffsets.Element1.X = (int) srcSize.Width;
+        blitRegion.SrcOffsets.Element1.Y = (int) srcSize.Height;
+        blitRegion.SrcOffsets.Element1.Z = 1;
+
+        blitRegion.DstOffsets.Element1.X = (int) dstSize.Width;
+        blitRegion.DstOffsets.Element1.Y = (int) dstSize.Height;
+        blitRegion.DstOffsets.Element1.Z = 1;
+
+        blitRegion.SrcSubresource.AspectMask = ImageAspectFlags.ColorBit;
+        blitRegion.SrcSubresource.BaseArrayLayer = 0;
+        blitRegion.SrcSubresource.LayerCount = 1;
+        blitRegion.SrcSubresource.MipLevel = 0;
+
+        blitRegion.DstSubresource.AspectMask = ImageAspectFlags.ColorBit;
+        blitRegion.DstSubresource.BaseArrayLayer = 0;
+        blitRegion.DstSubresource.LayerCount = 1;
+        blitRegion.DstSubresource.MipLevel = 0;
+
+        var blitImageInfo = new BlitImageInfo2 {
+            SType = StructureType.BlitImageInfo2,
+
+            SrcImage = source,
+            SrcImageLayout = ImageLayout.TransferSrcOptimal,
+            DstImage = destination,
+            DstImageLayout = ImageLayout.TransferDstOptimal,
+            Filter = Filter.Linear,
+            RegionCount = 1,
+            PRegions = &blitRegion
+        };
+
+        vk.CmdBlitImage2(commandBuffer, blitImageInfo);
+    }
+
+    /* --------------------------------------- */
+    /* Shaders                                 */
+    /* --------------------------------------- */
+
+    public static unsafe ShaderModule LoadShaderModel(Vk vk, Device device, string filePath) {
+        var spirvBytes = File.ReadAllBytes(filePath);
+
+        fixed (byte* shaderCode = spirvBytes) {
+            var shaderModuleInfo = new ShaderModuleCreateInfo {
+                SType = StructureType.ShaderModuleCreateInfo,
+                CodeSize = (nuint) spirvBytes.Length,
+                PCode = (uint*) shaderCode
+            };
+
+            if (vk.CreateShaderModule(device, shaderModuleInfo, null, out var shaderModule) != Result.Success) {
+                throw new DatRendererShaderException($"Failed to build shader module at {filePath}");
+            }
+
+            return shaderModule;
         }
     }
 

@@ -6,12 +6,12 @@ public class EngineSettings {
     /// <summary>
     /// The width of the game window
     /// </summary>
-    public int width = 1280;
+    public uint width = 1280;
 
     /// <summary>
     /// The height of the game window
     /// </summary>
-    public int height = 720;
+    public uint height = 720;
 
     /// <summary>
     /// The display mode of the window
@@ -23,28 +23,33 @@ public class EngineSettings {
     /// </summary>
     public uint? gpu;
 
-    public bool vsync = false;
-
-    public readonly bool debug = true;
+    /// <summary>
+    /// Whether VSync is enabled
+    /// </summary>
+    public bool vsync = true;
 
     /// <summary>
-    /// The desired number of buffered frames in the swapchain
+    /// The number of images to use for rendering too.
     /// <para/>
-    /// Note this is the desired value, the driver may restrict to more or less
+    /// Values > 1 can eliminate tearing as the renderer will be able to render to a different frame than the one being
+    /// presented.
     /// </summary>
     public uint bufferedFrames = 2;
 
+    /// <summary>
+    /// Whether debug mode is enabled
+    /// <para/>
+    /// This enables
+    /// </summary>
+    public bool debug = true;
+
     public WindowFlags getWindowFlags() {
-        switch (windowMode) {
-            case WindowMode.Fullscreen:
-                return WindowFlags.Fullscreen;
-            case WindowMode.Borderless:
-                return WindowFlags.Borderless;
-            case WindowMode.Windowed:
-                return WindowFlags.None;
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
+        return windowMode switch {
+            WindowMode.Fullscreen => WindowFlags.Fullscreen,
+            WindowMode.Borderless => WindowFlags.Borderless,
+            WindowMode.Windowed => WindowFlags.None,
+            _ => throw new ArgumentOutOfRangeException()
+        };
     }
 }
 
