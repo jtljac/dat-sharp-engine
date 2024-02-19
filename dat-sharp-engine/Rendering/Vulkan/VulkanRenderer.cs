@@ -61,6 +61,12 @@ public class VulkanRenderer : DatRenderer {
     private Pipeline _gradientPipeline;
     private PipelineLayout _gradientPipelineLayout;
 
+    // Immediate submit
+    private Fence _immFence;
+    private CommandPool _immCommandPool;
+    private CommandBuffer _immCommandBuffer;
+
+
     // Debug
     private ExtDebugUtils? _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
@@ -89,6 +95,8 @@ public class VulkanRenderer : DatRenderer {
         InitialiseSwapchain();
         InitialiseSwapchainImages();
         InitialiseFrameData();
+        InitialiseExtraCommands();
+        InitialiseExtraSyncStructures();
         InitialiseFrameImages();
         InitialiseDescriptors();
         InitialisePipelines();
@@ -623,6 +631,32 @@ public class VulkanRenderer : DatRenderer {
         _drawExtent = new Extent2D(drawImageExtent.Width, drawImageExtent.Height);
     }
 
+    private unsafe void InitialiseExtraCommands() {
+        CommandPoolCreateInfo commandPoolInfo = new() {
+            SType = StructureType.CommandPoolCreateInfo,
+            Flags = CommandPoolCreateFlags.ResetCommandBufferBit,
+            QueueFamilyIndex = _graphicsQueueIndex
+        };
+
+        if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immCommandPool) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate command pool");
+        }
+
+        var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(_immCommandPool, 1);
+
+        if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immCommandBuffer) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate command buffer");
+        }
+    }
+
+    private unsafe void InitialiseExtraSyncStructures() {
+        var fenceInfo = VkShortcuts.CreateFenceCreateInfo(FenceCreateFlags.SignaledBit);
+
+        if (_vk.CreateFence(_device, fenceInfo, null, out _immFence) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create frame render fence");
+        }
+    }
+
     private unsafe void InitialiseDescriptors() {
         Logger.EngineLogger.Debug("Initialising Descriptors");
         DescriptorAllocator.PoolSizeRatio[] sizes = [
@@ -656,14 +690,14 @@ public class VulkanRenderer : DatRenderer {
         _vk.UpdateDescriptorSets(_device, 1, &drawImageWrite, 0, null);
     }
 
-    void InitialisePipelines() {
+    private void InitialisePipelines() {
         Logger.EngineLogger.Debug("Initialising Pipelines");
         InitialiseBackgroundPipelines();
     }
 
     private unsafe void InitialiseBackgroundPipelines() {
         fixed (DescriptorSetLayout* setLayout = &_drawImageDescriptorLayout) {
-            PipelineLayoutCreateInfo computeLayout = new PipelineLayoutCreateInfo {
+            var computeLayout = new PipelineLayoutCreateInfo {
                 SType = StructureType.PipelineLayoutCreateInfo,
                 SetLayoutCount = 1,
                 PSetLayouts = setLayout
@@ -697,39 +731,15 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_vk.CreateComputePipelines(_device, default, 1, computePipelineInfo, null, out _gradientPipeline) != Result.Success) {
-            Marshal.Release((IntPtr) pEntryPoint);
             throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
         }
 
         _vk.DestroyShaderModule(_device, computeDrawShader, null);
     }
 
-    /// <summary>
-    /// Get the preferred surface format for the swapchain
-    /// </summary>
-    /// <returns>The preferred surface format for the swapchain</returns>
-    private SurfaceFormatKHR GetPreferredSwapchainFormat() {
-        var supportedFormats = VkHelper.GetDeviceSurfaceFormats(_khrSurface!, _physicalDevice, _surface);
-        return supportedFormats
-            .Where(format => format is { Format: Format.B8G8R8Srgb, ColorSpace: ColorSpaceKHR.SpaceSrgbNonlinearKhr })
-            .FirstOrDefault(supportedFormats[0]);
-    }
-
-    /// <summary>
-    /// Get the preferred present mode for the swapchain
-    /// <para/>
-    /// This uses the <see cref="EngineSettings.vsync"/> engine setting
-    /// </summary>
-    /// <returns>The preferred present mode</returns>
-    private PresentModeKHR GetPreferredPresentMode() {
-        var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
-
-        PresentModeKHR[] options = _datSharpEngine.engineSettings.vsync
-            ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
-            : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
-
-        return options.First(option => formats.Contains(option));
-    }
+    /* --------------------------------------- */
+    /* Queue                                   */
+    /* --------------------------------------- */
 
     public override unsafe void Draw(float deltaTime, float gameTime) {
         Logger.EngineLogger.Debug(deltaTime);
@@ -864,6 +874,30 @@ public class VulkanRenderer : DatRenderer {
         );
     }
 
+    public delegate void ImmediateSubmission(CommandBuffer buffer);
+
+    public unsafe void ImmediateSubmit(ImmediateSubmission method) {
+        _vk.ResetFences(_device, 1, _immFence);
+        _vk.ResetCommandBuffer(_immCommandBuffer, 0);
+
+        var commandBufferInfo =
+            VkShortcuts.CreateCommandBufferBeginInfo(CommandBufferUsageFlags.OneTimeSubmitBit);
+
+        _vk.BeginCommandBuffer(_immCommandBuffer, commandBufferInfo);
+        method(_immCommandBuffer);
+        _vk.EndCommandBuffer(_immCommandBuffer);
+
+        var submitInfo = VkShortcuts.CreateCommandBufferSubmitInfo(_immCommandBuffer);
+        var submit = VkShortcuts.CreateSubmitInfo(&submitInfo, null, null);
+
+        _vk.QueueSubmit2(_graphicsQueue, 1, submit, _immFence);
+        _vk.WaitForFences(_device, 1, _immFence, true, 9999999999);
+    }
+
+    /* --------------------------------------- */
+    /* Cleanup                                 */
+    /* --------------------------------------- */
+
     public override unsafe void Cleanup() {
         _vk.DeviceWaitIdle(_device);
 
@@ -871,8 +905,13 @@ public class VulkanRenderer : DatRenderer {
         _vk.DestroyPipelineLayout(_device, _gradientPipelineLayout, null);
 
         _vk.DestroyImageView(_device, _drawImage.imageView, null);
+
         _vk.DestroyImage(_device, _drawImage.image, null);
         _allocator!.FreeMemory(_drawImage.allocation);
+
+        _vk.DestroyFence(_device, _immFence, null);
+
+        _vk.DestroyCommandPool(_device, _immCommandPool, null);
 
         foreach (var frameData in _frameData) {
             _vk.DestroySemaphore(_device, frameData.renderSemaphore, null);
@@ -926,6 +965,33 @@ public class VulkanRenderer : DatRenderer {
     /* --------------------------------------- */
     /* Util                                    */
     /* --------------------------------------- */
+
+    /// <summary>
+    /// Get the preferred surface format for the swapchain
+    /// </summary>
+    /// <returns>The preferred surface format for the swapchain</returns>
+    private SurfaceFormatKHR GetPreferredSwapchainFormat() {
+        var supportedFormats = VkHelper.GetDeviceSurfaceFormats(_khrSurface!, _physicalDevice, _surface);
+        return supportedFormats
+            .Where(format => format is { Format: Format.B8G8R8Srgb, ColorSpace: ColorSpaceKHR.SpaceSrgbNonlinearKhr })
+            .FirstOrDefault(supportedFormats[0]);
+    }
+
+    /// <summary>
+    /// Get the preferred present mode for the swapchain
+    /// <para/>
+    /// This uses the <see cref="EngineSettings.vsync"/> engine setting
+    /// </summary>
+    /// <returns>The preferred present mode</returns>
+    private PresentModeKHR GetPreferredPresentMode() {
+        var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
+
+        PresentModeKHR[] options = _datSharpEngine.engineSettings.vsync
+            ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
+            : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
+
+        return options.First(option => formats.Contains(option));
+    }
 
     /// <summary>
     /// Check the device supports the requested validation layers
