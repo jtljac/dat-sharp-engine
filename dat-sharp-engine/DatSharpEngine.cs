@@ -1,5 +1,4 @@
-﻿using System.Reflection.Metadata;
-using dat_sharp_engine.Rendering;
+﻿using dat_sharp_engine.Rendering;
 using dat_sharp_engine.Rendering.Vulkan;
 using dat_sharp_engine.Util;
 using Silk.NET.SDL;
@@ -7,14 +6,21 @@ using Silk.NET.SDL;
 namespace dat_sharp_engine;
 
 public class DatSharpEngine {
+    // CVars
+    private static readonly CVar<bool> ResizableCvar = new("bWindowResizable", "Allow resizing the game window", false, CVarCategory.Graphics, CVarFlags.None);
+    private static readonly CVar<int> WindowModeCvar = new("eWindowMode", "The window mode, 0 for windowed, 1 for fullscreen, 2 for borderless", 0, CVarCategory.Graphics, CVarFlags.None);
+    private static readonly CVar<int> WindowWidthCvar = new("uWindowWidth", "The width of the game window", 1366, CVarCategory.Graphics, CVarFlags.None);
+    private static readonly CVar<int> WindowHeightCvar = new("uWindowHeight", "The height of the game window", 768, CVarCategory.Graphics, CVarFlags.None);
+
     internal readonly Sdl sdl = Sdl.GetApi();
     
     public readonly DatRenderer renderer;
-    public readonly EngineSettings engineSettings = new EngineSettings();
     public readonly ApplicationSettings appSettings;
     public unsafe Window* window;
 
-    public bool shouldClose { get; set; } = false;
+    public bool ShouldClose { get; set; } = false;
+
+    static DatSharpEngine() { }
 
     public DatSharpEngine(ApplicationSettings appSettings) {
         renderer = new VulkanRenderer(this);
@@ -27,26 +33,39 @@ public class DatSharpEngine {
         if (sdl.Init(Sdl.InitEverything) != 0) {
             throw new Exception("Failed to initialise SDL");
         }
+
+        // Initialise SDL window
         unsafe {
+            var windowFlags = renderer.GetWindowFlags();
+            if (ResizableCvar.Value) windowFlags |= (uint) WindowFlags.Resizable;
+            switch (WindowModeCvar.Value) {
+                case 1:
+                    windowFlags |= (uint) WindowFlags.Fullscreen;
+                    break;
+                case 2:
+                    windowFlags |= (uint) WindowFlags.Borderless;
+                    break;
+            }
+
             window = sdl.CreateWindow(appSettings.name,
                 Sdl.WindowposUndefined,
                 Sdl.WindowposUndefined,
-                (int) engineSettings.width,
-                (int) engineSettings.height,
-                (uint)(engineSettings.getWindowFlags() | renderer.GetWindowFlags()));
+                WindowWidthCvar.Value,
+                WindowHeightCvar.Value,
+                windowFlags);
 
             if (window == null) {
                 throw new Exception("Failed to create window");
             }
         }
-        Logger.EngineLogger.Debug("Created Window ({}, {})", engineSettings.width, engineSettings.height);
+        Logger.EngineLogger.Debug("Created Window ({}, {})", WindowWidthCvar.Value, WindowHeightCvar.Value);
 
         Logger.EngineLogger.Info("Initialising Renderer");
         renderer.Initialise();
         
         Logger.EngineLogger.Info("Initialising finished, starting main loop");
         var lastTime = sdl.GetTicks() - 16;
-        while (!shouldClose) {
+        while (!ShouldClose) {
             var currentTime = sdl.GetTicks();
             var deltaTime = (currentTime - lastTime) / 1000f;
             

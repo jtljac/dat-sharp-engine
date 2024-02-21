@@ -23,7 +23,7 @@ public abstract class DatRenderer {
     /// Usually specifies the API that SDL needs to setup
     /// </summary>
     /// <returns>SDL Window flags</returns>
-    public abstract WindowFlags GetWindowFlags();
+    public abstract uint GetWindowFlags();
 
     /// <summary>
     /// Initialise the renderer

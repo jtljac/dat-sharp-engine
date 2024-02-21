@@ -17,6 +17,14 @@ namespace dat_sharp_engine.Rendering.Vulkan;
 /// A renderer implementation using the Vulkan API
 /// </summary>
 public class VulkanRenderer : DatRenderer {
+    // CVars
+    private static readonly CVar<int> GpuUuidCvar = new("iGpuUuid", "The UUID of the GPU to use for rendering", 0, CVarCategory.Graphics, CVarFlags.None);
+    private static readonly CVar<uint> BufferedFramesCvar = new("iBufferedFrames", "The number of buffered frames to render with", 2, CVarCategory.Graphics, CVarFlags.None);
+    private static readonly CVar<bool> VsyncCvar = new("bVsync", "Enable VSync", false, CVarCategory.Graphics, CVarFlags.None);
+
+    private readonly CVar<int> _widthCvar = CVarSystem.Instance.GetIntCVar("uWindowWidth")!;
+    private readonly CVar<int> _heightCvar = CVarSystem.Instance.GetIntCVar("uWindowHeight")!;
+
     private readonly Vk _vk = Vk.GetApi();
     private readonly Sdl _sdl;
 
@@ -66,7 +74,6 @@ public class VulkanRenderer : DatRenderer {
     private CommandPool _immCommandPool;
     private CommandBuffer _immCommandBuffer;
 
-
     // Debug
     private ExtDebugUtils? _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
@@ -75,8 +82,9 @@ public class VulkanRenderer : DatRenderer {
         _sdl = _datSharpEngine.sdl;
     }
 
-    public override WindowFlags GetWindowFlags() {
-        return WindowFlags.Vulkan;
+    public override uint GetWindowFlags() {
+        return (uint) WindowFlags.Vulkan;
+
     }
 
     /* --------------------------------------- */
@@ -115,12 +123,13 @@ public class VulkanRenderer : DatRenderer {
 
         var extensions = GetInstanceExtensions();
 
-        ISet<string> layers;
-        if (_datSharpEngine.engineSettings.debug) {
-            layers = GetValidationLayers();
+#if DEBUG
+            var layers = GetValidationLayers();
 
             Logger.EngineLogger.Debug("Selected instance extensions: {content}", extensions);
-        } else layers = ImmutableHashSet<string>.Empty;
+#else
+            ISet<string>layers = ImmutableHashSet<string>.Empty;
+#endif
 
 
         var engineName = SilkMarshal.StringToPtr("DatSharpEngine");
@@ -156,6 +165,8 @@ public class VulkanRenderer : DatRenderer {
             PApplicationInfo = &appInfo,
         };
 
+
+#if DEBUG
         // We gotta dance this around so it may be included in the instance info and createDebug
         DebugUtilsMessengerCreateInfoEXT debugInfo = new() {
             SType = StructureType.DebugUtilsMessengerCreateInfoExt,
@@ -167,9 +178,8 @@ public class VulkanRenderer : DatRenderer {
             PfnUserCallback = (DebugUtilsMessengerCallbackFunctionEXT) VulkanDebugCallback
         };
 
-        if (_datSharpEngine.engineSettings.debug) {
-            instanceInfo.PNext = &debugInfo;
-        }
+        instanceInfo.PNext = &debugInfo;
+#endif
 
         var result = _vk.CreateInstance(instanceInfo, null, out _instance);
 
@@ -184,12 +194,12 @@ public class VulkanRenderer : DatRenderer {
         }
 
         // Setup debug stuff
-        if (!_datSharpEngine.engineSettings.debug) return;
-
+#if DEBUG
         if (!_vk.TryGetInstanceExtension(_instance, out _extDebugUtils))
             throw new DatRendererInitialisationException($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
 
         _extDebugUtils!.CreateDebugUtilsMessenger(_instance, debugInfo, null, out _debugUtilsMessenger);
+#endif
     }
 
     /// <summary>
@@ -242,9 +252,22 @@ public class VulkanRenderer : DatRenderer {
         // TODO: Better selection method
         var devices = _vk.GetPhysicalDevices(_instance);
         foreach (var gpu in devices) {
-            var properties = _vk.GetPhysicalDeviceProperties(gpu);
-            if (_datSharpEngine.engineSettings.gpu.HasValue &&
-                properties.DeviceID == _datSharpEngine.engineSettings.gpu) {
+            var deviceIdProperties = new PhysicalDeviceIDProperties {
+                SType = StructureType.PhysicalDeviceIDProperties
+            };
+            var deviceProperties2 = new PhysicalDeviceProperties2 {
+                SType = StructureType.PhysicalDeviceProperties2,
+                PNext = &deviceIdProperties,
+            };
+            _vk.GetPhysicalDeviceProperties2(gpu, &deviceProperties2);
+
+            var properties = deviceProperties2.Properties;
+            var deviceId = deviceIdProperties.DeviceUuid[0] << 3
+                | deviceIdProperties.DeviceUuid[1] << 2
+                | deviceIdProperties.DeviceUuid[2] << 1
+                | deviceIdProperties.DeviceUuid[3];
+
+            if (GpuUuidCvar.Value == deviceId) {
                 _physicalDevice = gpu;
                 break;
             }
@@ -457,7 +480,7 @@ public class VulkanRenderer : DatRenderer {
             throw new DatRendererInitialisationException("Failed to get surface capabilities");
         }
 
-        var imageCount = Math.Clamp(_datSharpEngine.engineSettings.bufferedFrames,
+        var imageCount = Math.Clamp(BufferedFramesCvar.Value,
             surfaceCapabilities.MinImageCount,
             surfaceCapabilities.MaxImageCount == 0 ? uint.MaxValue : surfaceCapabilities.MaxImageCount
         );
@@ -465,11 +488,11 @@ public class VulkanRenderer : DatRenderer {
         var swapchainFormat = GetPreferredSwapchainFormat();
         var presentMode = GetPreferredPresentMode();
         var extent = new Extent2D(
-            Math.Clamp((uint) _datSharpEngine.engineSettings.width,
+            Math.Clamp((uint) _widthCvar.Value,
                 surfaceCapabilities.MinImageExtent.Width,
                 surfaceCapabilities.MaxImageExtent.Width
             ),
-            Math.Clamp((uint) _datSharpEngine.engineSettings.height,
+            Math.Clamp((uint) _heightCvar.Value,
                 surfaceCapabilities.MinImageExtent.Height,
                 surfaceCapabilities.MaxImageExtent.Height
             )
@@ -545,7 +568,7 @@ public class VulkanRenderer : DatRenderer {
     private void InitialiseFrameData() {
         Logger.EngineLogger.Debug("Initialising Framedata");
 
-        _frameData = new FrameData[_datSharpEngine.engineSettings.bufferedFrames].Select(_ => new FrameData()).ToArray();
+        _frameData = new FrameData[BufferedFramesCvar.Value].Select(_ => new FrameData()).ToArray();
 
         foreach (var frameData in _frameData) {
             InitialiseFrameCommands(frameData);
@@ -604,7 +627,7 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseFrameImages() {
         Logger.EngineLogger.Debug("Initialising Frame Images");
-        var drawImageExtent = new Extent3D(_datSharpEngine.engineSettings.width, _datSharpEngine.engineSettings.height, 1);
+        var drawImageExtent = new Extent3D((uint?) _widthCvar.Value, (uint?) _heightCvar.Value, 1);
 
         const Format format = Format.R16G16B16A16Sfloat;
 
@@ -986,7 +1009,7 @@ public class VulkanRenderer : DatRenderer {
     private PresentModeKHR GetPreferredPresentMode() {
         var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
 
-        PresentModeKHR[] options = _datSharpEngine.engineSettings.vsync
+        PresentModeKHR[] options = VsyncCvar.Value
             ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
             : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
 
@@ -1012,6 +1035,6 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     /// <returns>The frame data for the current frame</returns>
     private FrameData GetCurrentFrameData() {
-        return _frameData[_currentFrame % _datSharpEngine.engineSettings.bufferedFrames];
+        return _frameData[_currentFrame % BufferedFramesCvar.Value];
     }
 }
