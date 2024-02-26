@@ -1,3 +1,6 @@
 [submodule "ThirdParty/VMAsharp"]
 	path = ThirdParty/VMAsharp
 	url = https://github.com/sunkin351/VMASharp
+[submodule "FirstParty/dat-sharp-vfs"]
+	path = FirstParty/dat-sharp-vfs
+	url = https://github.com/jtljac/dat-sharp-vfs

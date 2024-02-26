@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VMASharp", "ThirdParty\VMAs
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dat-asset-processor", "dat-asset-processor\dat-asset-processor.csproj", "{226889FE-B076-4011-BBF4-997924A3F195}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dat-sharp-vfs", "FirstParty\dat-sharp-vfs\dat-sharp-vfs\dat-sharp-vfs.csproj", "{003C9E05-144D-44A9-9645-1458CA9AD202}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,5 +35,9 @@ Global
 		{226889FE-B076-4011-BBF4-997924A3F195}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{226889FE-B076-4011-BBF4-997924A3F195}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{226889FE-B076-4011-BBF4-997924A3F195}.Release|Any CPU.Build.0 = Release|Any CPU
+		{003C9E05-144D-44A9-9645-1458CA9AD202}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{003C9E05-144D-44A9-9645-1458CA9AD202}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{003C9E05-144D-44A9-9645-1458CA9AD202}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{003C9E05-144D-44A9-9645-1458CA9AD202}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
