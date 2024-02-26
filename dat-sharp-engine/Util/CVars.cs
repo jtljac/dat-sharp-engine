@@ -18,7 +18,7 @@ namespace dat_sharp_engine.Util;
 /// </code>
 /// </example>
 /// <seealso cref="CVar{T}"/>
-public sealed class CVarSystem {
+public sealed class CVars {
     /// <summary>Storage for String CVars</summary>
     private readonly Dictionary<string, CVar<string>> _stringCVars = new();
     /// <summary>Storage for Integer CVars</summary>
@@ -37,9 +37,9 @@ public sealed class CVarSystem {
     private readonly Dictionary<string, object> _objectCVars = new();
 
     /// <summary>Singleton instance</summary>
-    public static CVarSystem Instance { get; } = new();
+    public static CVars Instance { get; } = new();
 
-    private CVarSystem() {}
+    private CVars() {}
 
     /// <summary>
     /// Get a CVar of the parameter type
@@ -251,7 +251,7 @@ public class CVar<T> {
         Flags = flags;
         Category = category;
 
-        CVarSystem.Instance.RegisterCVar(this);
+        CVars.Instance.RegisterCVar(this);
     }
 }
 

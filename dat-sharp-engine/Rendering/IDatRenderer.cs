@@ -6,11 +6,11 @@ public abstract class DatRenderer {
     /// <summary>
     /// A reference to the engine that owns this renderer
     /// </summary>
-    protected readonly DatSharpEngine _datSharpEngine;
+    protected readonly DatSharpEngine datSharpEngine;
     
     /// <param name="datSharpEngine">The engine that owns this renderer</param>
     protected DatRenderer(DatSharpEngine datSharpEngine) {
-        _datSharpEngine = datSharpEngine;
+        this.datSharpEngine = datSharpEngine;
     }
 
     ~DatRenderer() {

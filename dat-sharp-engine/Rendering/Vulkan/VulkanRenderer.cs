@@ -1,9 +1,13 @@
+#if !DEBUG
 using System.Collections.Immutable;
+#endif
+
 using System.Runtime.InteropServices;
 using dat_sharp_engine.Rendering.Util;
 using dat_sharp_engine.Rendering.Vulkan.Descriptor;
 using dat_sharp_engine.Util;
 using Silk.NET.Core.Native;
+using Silk.NET.Maths;
 using Silk.NET.SDL;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
@@ -22,8 +26,8 @@ public class VulkanRenderer : DatRenderer {
     private static readonly CVar<uint> BufferedFramesCvar = new("iBufferedFrames", "The number of buffered frames to render with", 2, CVarCategory.Graphics, CVarFlags.None);
     private static readonly CVar<bool> VsyncCvar = new("bVsync", "Enable VSync", false, CVarCategory.Graphics, CVarFlags.None);
 
-    private readonly CVar<int> _widthCvar = CVarSystem.Instance.GetIntCVar("uWindowWidth")!;
-    private readonly CVar<int> _heightCvar = CVarSystem.Instance.GetIntCVar("uWindowHeight")!;
+    private readonly CVar<int> _widthCvar = CVars.Instance.GetIntCVar("uWindowWidth")!;
+    private readonly CVar<int> _heightCvar = CVars.Instance.GetIntCVar("uWindowHeight")!;
 
     private readonly Vk _vk = Vk.GetApi();
     private readonly Sdl _sdl;
@@ -79,7 +83,7 @@ public class VulkanRenderer : DatRenderer {
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
 
     public VulkanRenderer(DatSharpEngine datSharpEngine) : base(datSharpEngine) {
-        _sdl = _datSharpEngine.sdl;
+        _sdl = base.datSharpEngine.sdl;
     }
 
     public override uint GetWindowFlags() {
@@ -124,16 +128,16 @@ public class VulkanRenderer : DatRenderer {
         var extensions = GetInstanceExtensions();
 
 #if DEBUG
-            var layers = GetValidationLayers();
+        var layers = GetValidationLayers();
 
-            Logger.EngineLogger.Debug("Selected instance extensions: {content}", extensions);
+        Logger.EngineLogger.Debug("Selected instance extensions: {content}", extensions);
 #else
-            ISet<string>layers = ImmutableHashSet<string>.Empty;
+        ISet<string>layers = ImmutableHashSet<string>.Empty;
 #endif
 
 
         var engineName = SilkMarshal.StringToPtr("DatSharpEngine");
-        var applicationName = SilkMarshal.StringToPtr(_datSharpEngine.appSettings.name);
+        var applicationName = SilkMarshal.StringToPtr(datSharpEngine.appSettings.name);
 
         ApplicationInfo appInfo = new() {
             SType = StructureType.ApplicationInfo,
@@ -142,9 +146,9 @@ public class VulkanRenderer : DatRenderer {
                 EngineConstants.ENGINE_VERSION.Minor,
                 EngineConstants.ENGINE_VERSION.Patch
             ),
-            ApplicationVersion = Vk.MakeVersion(_datSharpEngine.appSettings.version.Major,
-                _datSharpEngine.appSettings.version.Minor,
-                _datSharpEngine.appSettings.version.Patch
+            ApplicationVersion = Vk.MakeVersion(datSharpEngine.appSettings.version.Major,
+                datSharpEngine.appSettings.version.Minor,
+                datSharpEngine.appSettings.version.Patch
             ),
             PEngineName = (byte*) engineName,
             PApplicationName = (byte*) applicationName
@@ -216,11 +220,11 @@ public class VulkanRenderer : DatRenderer {
         };
 
         uint pCount = 0;
-        _sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, (byte**) null);
+        _sdl.VulkanGetInstanceExtensions(datSharpEngine.window, ref pCount, (byte**) null);
 
         var names = new string[pCount];
 
-        if (_sdl.VulkanGetInstanceExtensions(_datSharpEngine.window, ref pCount, names) != SdlBool.True) {
+        if (_sdl.VulkanGetInstanceExtensions(datSharpEngine.window, ref pCount, names) != SdlBool.True) {
             throw new DatRendererInitialisationException("Failed to get required instance extensions");
         }
 
@@ -228,7 +232,7 @@ public class VulkanRenderer : DatRenderer {
         return extensions;
     }
 
-    private ISet<string> GetValidationLayers() {
+    private HashSet<string> GetValidationLayers() {
         var layers = new HashSet<string> {
             "VK_LAYER_KHRONOS_validation",
             "VK_LAYER_LUNARG_monitor",
@@ -456,7 +460,7 @@ public class VulkanRenderer : DatRenderer {
         }
 
         VkNonDispatchableHandle handle;
-        _sdl.VulkanCreateSurface(_datSharpEngine.window, _instance.ToHandle(), &handle);
+        _sdl.VulkanCreateSurface(datSharpEngine.window, _instance.ToHandle(), &handle);
         _surface = handle.ToSurface();
     }
 
@@ -723,8 +727,17 @@ public class VulkanRenderer : DatRenderer {
             var computeLayout = new PipelineLayoutCreateInfo {
                 SType = StructureType.PipelineLayoutCreateInfo,
                 SetLayoutCount = 1,
-                PSetLayouts = setLayout
+                PSetLayouts = setLayout,
             };
+
+            var pushConstant = new PushConstantRange {
+                Offset = 0,
+                Size = (uint) sizeof(ComputePushConstants),
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+
+            computeLayout.PushConstantRangeCount = 1;
+            computeLayout.PPushConstantRanges = &pushConstant;
 
             if (_vk.CreatePipelineLayout(_device, computeLayout, null, out _gradientPipelineLayout) != Result.Success) {
                 throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
@@ -889,6 +902,10 @@ public class VulkanRenderer : DatRenderer {
             &drawImageDescriptor,
             null
         );
+
+        ComputePushConstants pushConstants = new(new Vector4D<float>(1, 0, 0, 1), new Vector4D<float>(0, 0, 1, 1));
+
+        _vk.CmdPushConstants(currentFrameData.commandBuffer, _gradientPipelineLayout, ShaderStageFlags.ComputeBit, 0, (uint) sizeof(ComputePushConstants), ref pushConstants);
 
         _vk.CmdDispatch(currentFrameData.commandBuffer,
             (uint) Math.Ceiling(_drawExtent.Width / 16.0),
