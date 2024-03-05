@@ -1,7 +1,7 @@
 using Silk.NET.Vulkan;
 using VMASharp;
 
-namespace dat_sharp_engine.Rendering.Vulkan;
+namespace dat_sharp_engine.Rendering.Vulkan.GpuStructures;
 
 /// <summary>
 /// A class describing an image allocated on the GPU

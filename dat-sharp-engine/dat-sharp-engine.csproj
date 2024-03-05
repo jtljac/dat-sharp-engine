@@ -19,6 +19,7 @@
 
     <ItemGroup>
       <Folder Include="Scene\" />
+      <Folder Include="UserInterface\" />
     </ItemGroup>
 
     <ItemGroup>
@@ -28,6 +29,8 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\FirstParty\dat-sharp-archive\dat-sharp-archive\dat-sharp-archive.csproj" />
+      <ProjectReference Include="..\FirstParty\dat-sharp-vfs\dat-sharp-vfs\dat-sharp-vfs.csproj" />
       <ProjectReference Include="..\ThirdParty\VMAsharp\VMASharp\VMASharp.csproj" />
     </ItemGroup>
 

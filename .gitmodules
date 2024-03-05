@@ -4,3 +4,6 @@
 [submodule "FirstParty/dat-sharp-vfs"]
 	path = FirstParty/dat-sharp-vfs
 	url = https://github.com/jtljac/dat-sharp-vfs
+[submodule "FirstParty/dat-sharp-archive"]
+	path = FirstParty/dat-sharp-archive
+	url = https://github.com/jtljac/dat-sharp-archive

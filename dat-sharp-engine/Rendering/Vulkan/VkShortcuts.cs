@@ -156,6 +156,47 @@ public static class VkShortcuts {
     }
     
     /* --------------------------------------- */
+    /* Rendering                               */
+    /* --------------------------------------- */
+    /// <summary>
+    /// Create a RenderingAttachmentInfo
+    /// </summary>
+    /// <param name="imageView">The image view being rendered to</param>
+    /// <param name="clearValue">The clearvalue, or null if the imageview isn't cleared</param>
+    /// <param name="imageLayout">The layout of the image</param>
+    /// <returns>The populated RenderingAttachmentInfo</returns>
+    public static RenderingAttachmentInfo CreateRenderingAttachmentInfo(ImageView imageView,
+        ClearValue? clearValue, ImageLayout imageLayout = ImageLayout.ColorAttachmentOptimal) {
+        var renderingAttachmentInfo = new RenderingAttachmentInfo {
+            SType = StructureType.RenderingAttachmentInfo,
+
+            ImageView = imageView,
+            ImageLayout = imageLayout,
+
+            LoadOp = clearValue.HasValue ? AttachmentLoadOp.Clear : AttachmentLoadOp.Load,
+            StoreOp = AttachmentStoreOp.Store,
+        };
+
+        if (clearValue.HasValue) {
+            renderingAttachmentInfo.ClearValue = clearValue.Value;
+        }
+        return renderingAttachmentInfo;
+    }
+
+
+    public static unsafe RenderingInfo CreateRenderingInfo(Extent2D drawExtent, RenderingAttachmentInfo* colorAttachment, RenderingAttachmentInfo* depth) {
+        return new RenderingInfo {
+            SType = StructureType.RenderingInfo,
+
+            RenderArea = new Rect2D(null, drawExtent),
+            LayerCount = 1,
+            ColorAttachmentCount = 1,
+            PColorAttachments = colorAttachment,
+            PDepthAttachment = depth
+        };
+    }
+
+    /* --------------------------------------- */
     /* Image                                   */
     /* --------------------------------------- */
 

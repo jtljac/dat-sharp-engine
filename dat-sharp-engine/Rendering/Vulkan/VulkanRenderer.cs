@@ -2,9 +2,14 @@
 using System.Collections.Immutable;
 #endif
 
+using System.Collections;
+using System.Numerics;
 using System.Runtime.InteropServices;
+using dat_sharp_engine.Collection;
+using dat_sharp_engine.Rendering.Object;
 using dat_sharp_engine.Rendering.Util;
 using dat_sharp_engine.Rendering.Vulkan.Descriptor;
+using dat_sharp_engine.Rendering.Vulkan.GpuStructures;
 using dat_sharp_engine.Util;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
@@ -13,7 +18,10 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using VMASharp;
+using Buffer = System.Buffer;
+using Queue = Silk.NET.Vulkan.Queue;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
+using Vertex = dat_sharp_engine.Rendering.Object.Vertex;
 
 namespace dat_sharp_engine.Rendering.Vulkan;
 
@@ -21,14 +29,6 @@ namespace dat_sharp_engine.Rendering.Vulkan;
 /// A renderer implementation using the Vulkan API
 /// </summary>
 public class VulkanRenderer : DatRenderer {
-    // CVars
-    private static readonly CVar<int> GpuUuidCvar = new("iGpuUuid", "The UUID of the GPU to use for rendering", 0, CVarCategory.Graphics, CVarFlags.None);
-    private static readonly CVar<uint> BufferedFramesCvar = new("iBufferedFrames", "The number of buffered frames to render with", 2, CVarCategory.Graphics, CVarFlags.None);
-    private static readonly CVar<bool> VsyncCvar = new("bVsync", "Enable VSync", false, CVarCategory.Graphics, CVarFlags.None);
-
-    private readonly CVar<int> _widthCvar = CVars.Instance.GetIntCVar("uWindowWidth")!;
-    private readonly CVar<int> _heightCvar = CVars.Instance.GetIntCVar("uWindowHeight")!;
-
     private readonly Vk _vk = Vk.GetApi();
     private readonly Sdl _sdl;
 
@@ -43,8 +43,22 @@ public class VulkanRenderer : DatRenderer {
     // Queues
     private uint _graphicsQueueIndex; // Queue index for graphics stuff
     private Queue _graphicsQueue; // Queue for graphics stuff
+    private bool _unifiedTransferQueue;
     private uint _transferQueueIndex; // Queue index for transferring assets to the gpu
     private Queue _transferQueue; // Queue for transferring assets to the gpu
+    public Queue TransferQueue {
+        get => _unifiedTransferQueue ? _graphicsQueue : _transferQueue;
+        set => _transferQueue = value;
+    }
+
+    public Queue ComputeQueue {
+        get => _unifiedComputeQueue ? _graphicsQueue : _computeQueue;
+        set => _computeQueue = value;
+    }
+
+    private bool _unifiedComputeQueue;
+    private uint _computeQueueIndex; // Queue index for asynchronous compute
+    private Queue _computeQueue; // Queue for performing asynchronous compute
 
     // Surface
     private KhrSurface? _khrSurface;
@@ -72,18 +86,27 @@ public class VulkanRenderer : DatRenderer {
     // Pipelines
     private Pipeline _gradientPipeline;
     private PipelineLayout _gradientPipelineLayout;
+    private PipelineLayout _trianglePipelineLayout;
+    private Pipeline _trianglePipeline;
 
     // Immediate submit
     private Fence _immFence;
-    private CommandPool _immCommandPool;
-    private CommandBuffer _immCommandBuffer;
+    private CommandPool _immGraphicsCommandPool;
+    private CommandBuffer _immGraphicsCommandBuffer;
+    private CommandPool _immTransferCommandPool;
+    private CommandBuffer _immTransferCommandBuffer;
+
+    // Gpu Memory tracking
+    private IdTrackedResource<AllocatedBuffer> _bufferList = new();
+    private IdTrackedResource<AllocatedMesh> _meshList = new();
 
     // Debug
     private ExtDebugUtils? _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
+    private AllocatedMesh _tempMesh;
 
     public VulkanRenderer(DatSharpEngine datSharpEngine) : base(datSharpEngine) {
-        _sdl = base.datSharpEngine.sdl;
+        _sdl = this.datSharpEngine.sdl;
     }
 
     public override uint GetWindowFlags() {
@@ -112,6 +135,7 @@ public class VulkanRenderer : DatRenderer {
         InitialiseFrameImages();
         InitialiseDescriptors();
         InitialisePipelines();
+        InitialiseMesh();
     }
 
     /// <summary>
@@ -294,58 +318,41 @@ public class VulkanRenderer : DatRenderer {
         var queueFamilies = VkHelper.GetQueueFamilyProperties(_vk, _physicalDevice);
 
         // Find Graphics queue
-        for (var i = 0; i < queueFamilies.Count; i++) {
-            var properties = queueFamilies[i];
+        _graphicsQueueIndex = (uint) GetBestQueue(queueFamilies, QueueFlags.GraphicsBit, Array.Empty<uint>());
 
-            if (!properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)) continue;
+        // Find transfer queue
+        var tempTrans = GetBestQueue(queueFamilies, QueueFlags.TransferBit, [_graphicsQueueIndex]);
 
-            _graphicsQueueIndex = (uint) i;
-            break;
+        // If we can't find a dedicated transfer queue, just use the graphics queue
+        if (tempTrans != -1)
+            _transferQueueIndex = (uint) tempTrans;
+        else {
+            _unifiedTransferQueue = true;
+            _transferQueueIndex = _graphicsQueueIndex;
+        }
+
+        // Find Compute queue
+        var tempComp = GetBestQueue(queueFamilies, QueueFlags.ComputeBit, tempTrans == -1 ? [_graphicsQueueIndex] : [_graphicsQueueIndex, _transferQueueIndex]);
+
+        // If we can't find a dedicated compute queue, just use the graphics queue
+        if (tempComp != -1)
+            _computeQueueIndex = (uint) tempComp;
+        else {
+            _unifiedComputeQueue = true;
+            _computeQueueIndex = _graphicsQueueIndex;
         }
 
         Logger.EngineLogger.Debug("Selected Graphics Queue: {}",
             VkHelper.GetQueueDescription((int) _graphicsQueueIndex, queueFamilies[(int) _graphicsQueueIndex])
         );
 
-        // Find transfer queue
-        var tempTrans = -1;
-        for (var i = 0; i < queueFamilies.Count; i++) {
-            var properties = queueFamilies[i];
-
-            if (!properties.QueueFlags.HasFlag(QueueFlags.TransferBit)
-                || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
-                || properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)) continue;
-
-            tempTrans = i;
-            break;
-        }
-
-        // If we can't find a dedicated transfer queue, just use the graphics queue
-        _transferQueueIndex = tempTrans != -1 ? (uint) tempTrans : _graphicsQueueIndex;
-
         Logger.EngineLogger.Debug("Selected Transfer Queue: {}",
             VkHelper.GetQueueDescription((int) _transferQueueIndex, queueFamilies[(int) _transferQueueIndex])
         );
 
-        // // Find Compute queue
-        // var tempComp = -1;
-        // for (var i = 0; i < queueFamilies.Length; i++) {
-        //     var properties = queueFamilies[i];
-        //
-        //     if (!properties.QueueFlags.HasFlag(QueueFlags.ComputeBit)
-        //         || properties.QueueFlags.HasFlag(QueueFlags.GraphicsBit)
-        //         || properties.QueueFlags.HasFlag(QueueFlags.TransferBit)) continue;
-        //
-        //     tempComp = i;
-        //     break;
-        // }
-        //
-        // // If we can't find a dedicated compute queue, just use the graphics queue
-        // _computeQueueIndex = tempComp != -1 ? (uint)tempComp : graphicsQueueIndex;
-        //
-        // Logger.EngineLogger.Debug("Selected Compute Queue: {}",
-        //     GetQueueDescription((int) _computeQueueIndex, queueFamilies[_computeQueueIndex])
-        // );
+        Logger.EngineLogger.Debug("Selected Compute Queue: {}",
+            VkHelper.GetQueueDescription((int) _computeQueueIndex, queueFamilies[(int) _computeQueueIndex])
+        );
     }
 
     /// <summary>
@@ -361,72 +368,84 @@ public class VulkanRenderer : DatRenderer {
 
         var enabledExtensions = SilkMarshal.StringArrayToPtr(deviceExtensions.ToArray());
 
-        var priority = 1.0f;
-        List<DeviceQueueCreateInfo> queueInfos = new() {
-            new DeviceQueueCreateInfo {
-                SType = StructureType.DeviceQueueCreateInfo,
-                QueueCount = 1,
-                QueueFamilyIndex = _graphicsQueueIndex,
-                PQueuePriorities = &priority
-            }
-        };
+        /*
+         * Stupid bollocks to dynamically setup queues
+         * Basically we need to count the number of usages in each queue and allocate that many of each queue, so we
+         * count with a dictionary.
+         * We don't currently deal with priorities, and we need a pinned array to use as a pointer, so we just create
+         * one filled with 1s that is the biggest it'll ever be and reuse it.
+         */
+        Dictionary<uint, uint> queueDict = [];
+        ++CollectionsMarshal.GetValueRefOrAddDefault(queueDict, _graphicsQueueIndex, out _);
+        if (!_unifiedTransferQueue) ++CollectionsMarshal.GetValueRefOrAddDefault(queueDict, _transferQueueIndex, out _);
+        if (!_unifiedComputeQueue) ++CollectionsMarshal.GetValueRefOrAddDefault(queueDict, _computeQueueIndex, out _);
 
-        // Make sure we only request 1 queue if the transfer and graphics queues are the same
-        if (_transferQueueIndex != _graphicsQueueIndex) {
-            queueInfos.Add(new DeviceQueueCreateInfo {
+        var priorities = Enumerable.Repeat(1.0f, (int) queueDict.Values.Max()).ToArray();
+
+        fixed (float* pQueuePriorities = priorities) {
+            var queueInfos = new DeviceQueueCreateInfo[queueDict.Count];
+            var i = 0;
+            foreach (var queueDictKey in queueDict.Keys) {
+                queueInfos[i++] = new DeviceQueueCreateInfo {
                     SType = StructureType.DeviceQueueCreateInfo,
-                    QueueCount = 1,
-                    QueueFamilyIndex = _transferQueueIndex,
-                    PQueuePriorities = &priority
-                }
-            );
-        }
+                    QueueCount = queueDict[queueDictKey],
+                    QueueFamilyIndex = queueDictKey,
+                    PQueuePriorities = pQueuePriorities
+                };
+            }
 
-        // Toggle on features
-        var features = new PhysicalDeviceFeatures {
-            FillModeNonSolid = Vk.True
-        };
-
-        // Device features that require setup via PNext
-        // (This would have been in it's own function but memory management needs to be handled in silly ways for garbage
-        // collection reasons)
-        var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures {
-            SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
-            ShaderDrawParameters = true
-        };
-
-        var vulkan12Features = new PhysicalDeviceVulkan12Features {
-            SType = StructureType.PhysicalDeviceVulkan12Features,
-            BufferDeviceAddress = true,
-            DescriptorIndexing = true,
-            PNext = &drawParametersFeatures
-        };
-        var vulkan13Features = new PhysicalDeviceVulkan13Features {
-            SType = StructureType.PhysicalDeviceVulkan13Features,
-            DynamicRendering = true,
-            Synchronization2 = true,
-            PNext = &vulkan12Features
-        };
-
-        fixed (DeviceQueueCreateInfo* queues = queueInfos.ToArray()) {
-            DeviceCreateInfo deviceInfo = new() {
-                SType = StructureType.DeviceCreateInfo,
-                EnabledLayerCount = 0,
-                PpEnabledLayerNames = null,
-                EnabledExtensionCount = (uint) deviceExtensions.Count,
-                PpEnabledExtensionNames = (byte**) enabledExtensions,
-                QueueCreateInfoCount = (uint) queueInfos.Count,
-                PQueueCreateInfos = queues,
-                PEnabledFeatures = &features,
-                PNext = &vulkan13Features
+            // Toggle on features
+            var features = new PhysicalDeviceFeatures {
+                FillModeNonSolid = Vk.True
             };
 
-            if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
-                throw new DatRendererInitialisationException("Failed to create device");
-            }
+            // Device features that require setup via PNext
+            // (This would have been in it's own function but memory management needs to be handled in silly ways for garbage
+            // collection reasons)
+            var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures {
+                SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
+                ShaderDrawParameters = true
+            };
 
-            _vk.GetDeviceQueue(_device, _graphicsQueueIndex, 0, out _graphicsQueue);
-            _vk.GetDeviceQueue(_device, _transferQueueIndex, 0, out _transferQueue);
+            var vulkan12Features = new PhysicalDeviceVulkan12Features {
+                SType = StructureType.PhysicalDeviceVulkan12Features,
+                BufferDeviceAddress = true,
+                DescriptorIndexing = true,
+                PNext = &drawParametersFeatures
+            };
+            var vulkan13Features = new PhysicalDeviceVulkan13Features {
+                SType = StructureType.PhysicalDeviceVulkan13Features,
+                DynamicRendering = true,
+                Synchronization2 = true,
+                PNext = &vulkan12Features
+            };
+
+            fixed (DeviceQueueCreateInfo* queues = queueInfos) {
+                DeviceCreateInfo deviceInfo = new() {
+                    SType = StructureType.DeviceCreateInfo,
+                    EnabledLayerCount = 0,
+                    PpEnabledLayerNames = null,
+                    EnabledExtensionCount = (uint) deviceExtensions.Count,
+                    PpEnabledExtensionNames = (byte**) enabledExtensions,
+                    QueueCreateInfoCount = (uint) queueInfos.Length,
+                    PQueueCreateInfos = queues,
+                    PEnabledFeatures = &features,
+                    PNext = &vulkan13Features
+                };
+
+                if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
+                    throw new DatRendererInitialisationException("Failed to create device");
+                }
+
+                // We always want the graphics queue to get the 0 index queue, so we gotta do this weird unwind when
+                // to account for queues
+                if (!_unifiedComputeQueue)
+                    _vk.GetDeviceQueue(_device, _computeQueueIndex, --CollectionsMarshal.GetValueRefOrNullRef(queueDict, _computeQueueIndex), out _computeQueue);
+                if (!_unifiedTransferQueue)
+                    _vk.GetDeviceQueue(_device, _transferQueueIndex, --CollectionsMarshal.GetValueRefOrNullRef(queueDict, _transferQueueIndex), out _transferQueue);
+
+                _vk.GetDeviceQueue(_device, _graphicsQueueIndex, --CollectionsMarshal.GetValueRefOrNullRef(queueDict, _graphicsQueueIndex), out _graphicsQueue);
+            }
         }
     }
 
@@ -492,11 +511,11 @@ public class VulkanRenderer : DatRenderer {
         var swapchainFormat = GetPreferredSwapchainFormat();
         var presentMode = GetPreferredPresentMode();
         var extent = new Extent2D(
-            Math.Clamp((uint) _widthCvar.Value,
+            Math.Clamp((uint) widthCvar.Value,
                 surfaceCapabilities.MinImageExtent.Width,
                 surfaceCapabilities.MaxImageExtent.Width
             ),
-            Math.Clamp((uint) _heightCvar.Value,
+            Math.Clamp((uint) heightCvar.Value,
                 surfaceCapabilities.MinImageExtent.Height,
                 surfaceCapabilities.MaxImageExtent.Height
             )
@@ -631,7 +650,7 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseFrameImages() {
         Logger.EngineLogger.Debug("Initialising Frame Images");
-        var drawImageExtent = new Extent3D((uint?) _widthCvar.Value, (uint?) _heightCvar.Value, 1);
+        var drawImageExtent = new Extent3D((uint?) widthCvar.Value, (uint?) heightCvar.Value, 1);
 
         const Format format = Format.R16G16B16A16Sfloat;
 
@@ -665,14 +684,28 @@ public class VulkanRenderer : DatRenderer {
             QueueFamilyIndex = _graphicsQueueIndex
         };
 
-        if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immCommandPool) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate command pool");
+        // Graphics Queue
+        if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immGraphicsCommandPool) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate graphics command pool");
         }
 
-        var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(_immCommandPool, 1);
+        var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(_immGraphicsCommandPool, 1);
 
-        if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immCommandBuffer) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate command buffer");
+        if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immGraphicsCommandBuffer) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate graphics command buffer");
+        }
+
+        // Transfer Queue
+        commandPoolInfo.QueueFamilyIndex = _transferQueueIndex;
+
+        if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immTransferCommandPool) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate transfer command pool");
+        }
+
+        bufferAllocateInfo.CommandPool = _immTransferCommandPool;
+
+        if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immTransferCommandBuffer) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to create immediate transfer buffer");
         }
     }
 
@@ -720,8 +753,8 @@ public class VulkanRenderer : DatRenderer {
     private void InitialisePipelines() {
         Logger.EngineLogger.Debug("Initialising Pipelines");
         InitialiseBackgroundPipelines();
+        InitialiseMeshPipeline();
     }
-
     private unsafe void InitialiseBackgroundPipelines() {
         fixed (DescriptorSetLayout* setLayout = &_drawImageDescriptorLayout) {
             var computeLayout = new PipelineLayoutCreateInfo {
@@ -750,13 +783,13 @@ public class VulkanRenderer : DatRenderer {
         );
 
         const string entryPoint = "main";
-        var pEntryPoint = (byte*)Marshal.StringToHGlobalAnsi(entryPoint);
+        var pEntryPoint = Marshal.StringToHGlobalAnsi(entryPoint);
 
         var stageInfo = new PipelineShaderStageCreateInfo {
             SType = StructureType.PipelineShaderStageCreateInfo,
             Stage = ShaderStageFlags.ComputeBit,
             Module = computeDrawShader,
-            PName = pEntryPoint
+            PName = (byte*) pEntryPoint
         };
 
         var computePipelineInfo = new ComputePipelineCreateInfo {
@@ -770,7 +803,136 @@ public class VulkanRenderer : DatRenderer {
             throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
         }
 
+        Marshal.FreeHGlobal(pEntryPoint);
+
         _vk.DestroyShaderModule(_device, computeDrawShader, null);
+    }
+
+    private unsafe void InitialiseTrianglePipeline() {
+        var triangleFrag = VkHelper.LoadShaderModel(_vk,
+            _device,
+            "/home/jacob/Projects/Dotnet/dat-sharp-engine/dat-sharp-engine/Assets/Shaders/colouredTriangle.frag.spv"
+        );
+        var triangleVert = VkHelper.LoadShaderModel(_vk,
+            _device,
+            "/home/jacob/Projects/Dotnet/dat-sharp-engine/dat-sharp-engine/Assets/Shaders/colouredTriangle.vert.spv"
+        );
+
+        var pipelineLayout = new PipelineLayoutCreateInfo {
+            SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 0,
+            PSetLayouts = null,
+        };
+
+        if (_vk.CreatePipelineLayout(_device, pipelineLayout, null, out _trianglePipelineLayout) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+        }
+
+        _trianglePipeline = new PipelineBuilder(_vk, _device)
+            .SetPipelineLayout(_trianglePipelineLayout)
+            .AddDefaultGraphicsShaderStages(triangleVert, triangleFrag)
+            .SetInputTopology(PrimitiveTopology.TriangleList)
+            .SetPolygonMode(PolygonMode.Fill)
+            .SetCullMode(CullModeFlags.None, FrontFace.Clockwise)
+            .DisableMultisampling()
+            .DisableBlending()
+            .DisableDepthTest()
+            .AddColourAttachment(_drawImage.format)
+            .SetDepthFormat(Format.Undefined)
+            .Build();
+
+        _vk.DestroyShaderModule(_device, triangleFrag, null);
+        _vk.DestroyShaderModule(_device, triangleVert, null);
+    }
+
+    private unsafe void InitialiseMeshPipeline() {
+        var triangleFrag = VkHelper.LoadShaderModel(_vk,
+            _device,
+            "/home/jacob/Projects/Dotnet/dat-sharp-engine/dat-sharp-engine/Assets/Shaders/colouredTriangle.frag.spv"
+        );
+        var triangleVert = VkHelper.LoadShaderModel(_vk,
+            _device,
+            "/home/jacob/Projects/Dotnet/dat-sharp-engine/dat-sharp-engine/Assets/Shaders/triangleMesh.vert.spv"
+        );
+
+        var bufferRange = new PushConstantRange {
+            Offset = 0,
+            Size = (uint) sizeof(DrawPushConstants),
+            StageFlags = ShaderStageFlags.VertexBit,
+        };
+
+        var pipelineLayout = new PipelineLayoutCreateInfo {
+            SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 0,
+            PSetLayouts = null,
+            PushConstantRangeCount = 1,
+            PPushConstantRanges = &bufferRange
+        };
+
+        if (_vk.CreatePipelineLayout(_device, pipelineLayout, null, out _trianglePipelineLayout) != Result.Success) {
+            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+        }
+
+        _trianglePipeline = new PipelineBuilder(_vk, _device)
+            .SetPipelineLayout(_trianglePipelineLayout)
+            .AddDefaultGraphicsShaderStages(triangleVert, triangleFrag)
+            .SetInputTopology(PrimitiveTopology.TriangleList)
+            .SetPolygonMode(PolygonMode.Fill)
+            .SetCullMode(CullModeFlags.None, FrontFace.Clockwise)
+            .DisableMultisampling()
+            .DisableBlending()
+            .DisableDepthTest()
+            .AddColourAttachment(_drawImage.format)
+            .SetDepthFormat(Format.Undefined)
+            .Build();
+
+        _vk.DestroyShaderModule(_device, triangleFrag, null);
+        _vk.DestroyShaderModule(_device, triangleVert, null);
+    }
+
+    private void InitialiseMesh() {
+        Vertex[] vertices = [
+            new Vertex(
+                new Vector3D<float>(0.5f, -0.5f, 0),
+                0,
+                new Vector3D<float>(),
+                0,
+                new Vector4D<float>(0, 0, 0, 1)
+            ),
+            new Vertex(
+                new Vector3D<float>(0.5f, 0.5f, 0),
+                0,
+                new Vector3D<float>(),
+                0,
+                new Vector4D<float>(0.5f, 0.5f, 0.5f , 1)
+            ),
+            new Vertex(
+                new Vector3D<float>(-0.5f, -0.5f, 0),
+                0,
+                new Vector3D<float>(),
+                0,
+                new Vector4D<float>(1, 0, 0, 1)
+            ),
+            new Vertex(
+                new Vector3D<float>(-0.5f, 0.5f, 0),
+                0,
+                new Vector3D<float>(),
+                0,
+                new Vector4D<float>(0, 1, 0, 1)
+            )
+        ];
+
+        uint[] indices = [
+            0,
+            1,
+            2,
+
+            2,
+            1,
+            3
+        ];
+
+        _tempMesh = UploadMesh(new Mesh(vertices, indices));
     }
 
     /* --------------------------------------- */
@@ -814,13 +976,26 @@ public class VulkanRenderer : DatRenderer {
 
         DrawBackground(currentFrameData);
 
-        // Transition draw and swapchain images for transfer
+        // Transition draw for graphics pipeline
         VkHelper.TransitionImage(_vk,
             currentFrameData.commandBuffer,
             _drawImage.image,
             ImageLayout.General,
+            ImageLayout.ColorAttachmentOptimal,
+            PipelineStageFlags2.ComputeShaderBit,
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.MemoryWriteBit,
+            AccessFlags2.MemoryReadBit);
+
+        DrawGeometry(_drawImage, currentFrameData);
+
+        // Transition draw and swapchain images for transfer
+        VkHelper.TransitionImage(_vk,
+            currentFrameData.commandBuffer,
+            _drawImage.image,
+            ImageLayout.ColorAttachmentOptimal,
             ImageLayout.TransferSrcOptimal,
-            PipelineStageFlags2.ColorAttachmentOutputBit,
+            PipelineStageFlags2.FragmentShaderBit,
             PipelineStageFlags2.ColorAttachmentOutputBit,
             AccessFlags2.MemoryWriteBit,
             AccessFlags2.MemoryReadBit);
@@ -830,7 +1005,7 @@ public class VulkanRenderer : DatRenderer {
             swapchainData.image,
             ImageLayout.Undefined,
             ImageLayout.TransferDstOptimal,
-            PipelineStageFlags2.ColorAttachmentOutputBit,
+            PipelineStageFlags2.FragmentShaderBit,
             PipelineStageFlags2.ColorAttachmentOutputBit,
             AccessFlags2.None,
             AccessFlags2.MemoryWriteBit);
@@ -889,7 +1064,6 @@ public class VulkanRenderer : DatRenderer {
 
         ++_currentFrame;
     }
-
     private unsafe void DrawBackground(FrameData currentFrameData) {
         _vk.CmdBindPipeline(currentFrameData.commandBuffer, PipelineBindPoint.Compute, _gradientPipeline);
 
@@ -914,24 +1088,175 @@ public class VulkanRenderer : DatRenderer {
         );
     }
 
+    private unsafe void DrawGeometry(AllocatedImage drawImage, FrameData currentFrameData) {
+        var colorAttachment = VkShortcuts.CreateRenderingAttachmentInfo(drawImage.imageView, null);
+
+        var renderingInfo = VkShortcuts.CreateRenderingInfo(_drawExtent, &colorAttachment, null);
+        _vk.CmdBeginRendering(currentFrameData.commandBuffer, renderingInfo);
+
+        var viewport = new Viewport {
+            X = 0,
+            Y = 0,
+            Width = _drawExtent.Width,
+            Height = _drawExtent.Height,
+            MinDepth = 0,
+            MaxDepth = 1
+        };
+        _vk.CmdSetViewport(currentFrameData.commandBuffer, 0, 1, viewport);
+
+        var scissor = new Rect2D {
+            Offset = new Offset2D {
+                X = 0,
+                Y = 0
+            },
+            Extent = _drawExtent
+        };
+        _vk.CmdSetScissor(currentFrameData.commandBuffer, 0, 1, scissor);
+
+        _vk.CmdBindPipeline(currentFrameData.commandBuffer, PipelineBindPoint.Graphics, _trianglePipeline);
+
+        var pushConstants = new DrawPushConstants(Matrix4X4<float>.Identity, _tempMesh.vertexBufferAddress);
+        _vk.CmdPushConstants(currentFrameData.commandBuffer, _trianglePipelineLayout, ShaderStageFlags.VertexBit, 0, (uint) sizeof(DrawPushConstants), ref pushConstants);
+        _vk.CmdBindIndexBuffer(currentFrameData.commandBuffer, _tempMesh.indexBuffer.buffer, 0, IndexType.Uint32);
+
+        _vk.CmdDrawIndexed(currentFrameData.commandBuffer, 6, 1, 0, 0, 0);
+
+        _vk.CmdEndRendering(currentFrameData.commandBuffer);
+    }
+
+
     public delegate void ImmediateSubmission(CommandBuffer buffer);
 
     public unsafe void ImmediateSubmit(ImmediateSubmission method) {
         _vk.ResetFences(_device, 1, _immFence);
-        _vk.ResetCommandBuffer(_immCommandBuffer, 0);
+        _vk.ResetCommandBuffer(_immGraphicsCommandBuffer, 0);
 
         var commandBufferInfo =
             VkShortcuts.CreateCommandBufferBeginInfo(CommandBufferUsageFlags.OneTimeSubmitBit);
 
-        _vk.BeginCommandBuffer(_immCommandBuffer, commandBufferInfo);
-        method(_immCommandBuffer);
-        _vk.EndCommandBuffer(_immCommandBuffer);
+        _vk.BeginCommandBuffer(_immGraphicsCommandBuffer, commandBufferInfo);
+        method(_immGraphicsCommandBuffer);
+        _vk.EndCommandBuffer(_immGraphicsCommandBuffer);
 
-        var submitInfo = VkShortcuts.CreateCommandBufferSubmitInfo(_immCommandBuffer);
+        var submitInfo = VkShortcuts.CreateCommandBufferSubmitInfo(_immGraphicsCommandBuffer);
         var submit = VkShortcuts.CreateSubmitInfo(&submitInfo, null, null);
 
         _vk.QueueSubmit2(_graphicsQueue, 1, submit, _immFence);
-        _vk.WaitForFences(_device, 1, _immFence, true, 9999999999);
+        _vk.WaitForFences(_device, 1, _immFence, true, ulong.MaxValue);
+    }
+    
+    /* --------------------------------------- */
+    /* Asset Handling                          */
+    /* --------------------------------------- */
+
+    public override unsafe AllocatedMesh UploadMesh(Mesh mesh) {
+        var vertexSize = (ulong) (mesh.vertices.Length * sizeof(Vertex));
+        var indexSize = (ulong) (mesh.indices.Length * sizeof(uint));
+
+        var vertexBuffer = CreateBuffer(vertexSize,
+            BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit |
+            BufferUsageFlags.ShaderDeviceAddressBit,
+            MemoryUsage.GPU_Only
+        );
+
+        var vertexAddress = _vk.GetBufferDeviceAddress(_device,
+            new BufferDeviceAddressInfo { SType = StructureType.BufferDeviceAddressInfo, Buffer = vertexBuffer.buffer }
+        );
+
+        var indexBuffer = CreateBuffer(indexSize,
+            BufferUsageFlags.IndexBufferBit | BufferUsageFlags.TransferDstBit,
+            MemoryUsage.GPU_Only
+        );
+
+        // TODO: Move to dedicated transfer queue
+
+        var stagingBuffer =
+            CreateBuffer(vertexSize + indexSize, BufferUsageFlags.TransferSrcBit, MemoryUsage.CPU_Only);
+
+        var bufferPtr = stagingBuffer.allocation.Map();
+
+        fixed(Vertex* vertex = mesh.vertices) {
+            Buffer.MemoryCopy(vertex, bufferPtr.ToPointer(), (ulong) stagingBuffer.allocation.Size, vertexSize);
+        }
+
+        fixed (uint* index = mesh.indices) {
+            Buffer.MemoryCopy(index, (byte*) bufferPtr.ToPointer() + (int) vertexSize , indexSize, indexSize);
+        }
+
+        ImmediateSubmit((cmd) => {
+            var vertexCopy = new BufferCopy {
+                DstOffset = 0,
+                SrcOffset = 0,
+                Size = vertexSize
+            };
+
+            _vk.CmdCopyBuffer(cmd, stagingBuffer.buffer, vertexBuffer.buffer, 1, vertexCopy);
+
+            var indexCopy = new BufferCopy {
+                DstOffset = 0,
+                SrcOffset = vertexSize,
+                Size = indexSize
+            };
+
+            _vk.CmdCopyBuffer(cmd, stagingBuffer.buffer, indexBuffer.buffer, 1, indexCopy);
+        });
+
+        stagingBuffer.allocation.Unmap();
+
+        DestroyBuffer(stagingBuffer);
+
+        var newMesh = new AllocatedMesh(indexBuffer, vertexBuffer, vertexAddress);
+
+        mesh.GpuIndex = _meshList.Insert(newMesh);
+        return newMesh;
+    }
+
+    /* --------------------------------------- */
+    /* Allocation                              */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Create a new GPU Buffer
+    /// </summary>
+    /// <param name="allocSize">The size of the buffer</param>
+    /// <param name="usage">The usage flags for the buffer</param>
+    /// <param name="memoryUsage">The usage flags for the memory</param>
+    /// <param name="flags">The flags for the memory allocation</param>
+    /// <returns>An allocated buffer</returns>
+    public AllocatedBuffer CreateBuffer(ulong allocSize, BufferUsageFlags usage, MemoryUsage memoryUsage, AllocationCreateFlags flags = AllocationCreateFlags.Mapped) {
+        var bufferInfo = new BufferCreateInfo {
+            SType = StructureType.BufferCreateInfo,
+            Size = allocSize,
+            Usage = usage,
+            SharingMode = SharingMode.Exclusive
+        };
+
+        var allocInfo = new AllocationCreateInfo {
+            Usage = memoryUsage,
+            Flags = flags
+        };
+
+        var buffer = _allocator!.CreateBuffer(bufferInfo, allocInfo, out var allocation);
+
+        return new AllocatedBuffer(buffer, allocation);
+    }
+
+    /// <summary>
+    /// Destroy an allocated buffer
+    /// </summary>
+    /// <param name="buffer">The allocated buffer to destroy</param>
+    public unsafe void DestroyBuffer(AllocatedBuffer buffer) {
+        _vk.DestroyBuffer(_device, buffer.buffer, null);
+        _allocator!.FreeMemory(buffer.allocation);
+    }
+
+    /// <summary>
+    /// Destroy an allocated image
+    /// </summary>
+    /// <param name="image">The allocated image to destroy</param>
+    public unsafe void DestroyImage(AllocatedImage image) {
+        _vk.DestroyImage(_device, image.image, null);
+        _allocator!.FreeMemory(image.allocation);
     }
 
     /* --------------------------------------- */
@@ -941,17 +1266,19 @@ public class VulkanRenderer : DatRenderer {
     public override unsafe void Cleanup() {
         _vk.DeviceWaitIdle(_device);
 
+        _vk.DestroyPipeline(_device, _trianglePipeline, null);
+        _vk.DestroyPipelineLayout(_device, _trianglePipelineLayout, null);
+
         _vk.DestroyPipeline(_device, _gradientPipeline, null);
         _vk.DestroyPipelineLayout(_device, _gradientPipelineLayout, null);
 
         _vk.DestroyImageView(_device, _drawImage.imageView, null);
 
-        _vk.DestroyImage(_device, _drawImage.image, null);
-        _allocator!.FreeMemory(_drawImage.allocation);
+        DestroyImage(_drawImage);
 
         _vk.DestroyFence(_device, _immFence, null);
 
-        _vk.DestroyCommandPool(_device, _immCommandPool, null);
+        _vk.DestroyCommandPool(_device, _immGraphicsCommandPool, null);
 
         foreach (var frameData in _frameData) {
             _vk.DestroySemaphore(_device, frameData.renderSemaphore, null);
@@ -978,7 +1305,6 @@ public class VulkanRenderer : DatRenderer {
         _vk.DestroyInstance(_instance, null);
         _vk.Dispose();
     }
-
 
     /* --------------------------------------- */
     /* Debug                                   */
@@ -1031,6 +1357,28 @@ public class VulkanRenderer : DatRenderer {
             : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
 
         return options.First(option => formats.Contains(option));
+    }
+
+    /// <summary>
+    /// Get the best queue family to use for the given flags
+    /// </summary>
+    /// <param name="queues">The list of queue family properties to pick from</param>
+    /// <param name="requiredFlags">The flags required for the queue being selected</param>
+    /// <param name="usedQueues">The queues that have already been used</param>
+    /// <returns>The best queue family for the flags, or -1 if there isn't one</returns>
+    private static int GetBestQueue(IEnumerable<QueueFamilyProperties> queues, QueueFlags requiredFlags, uint[] usedQueues) {
+        // Must have all required flags
+        // Preferably as few other flags as possible
+        return queues
+            .Select((properties, index) => (properties, index))
+            .Where(properties => {
+                    return (properties.properties.QueueFlags & requiredFlags) != 0
+                           && usedQueues.Count(element => element == properties.index) < properties.properties.QueueCount;
+                }
+            )
+            .OrderBy(properties => BitOperations.PopCount((uint) properties.properties.QueueFlags))
+            .Select((properties) => properties.index)
+            .FirstOrDefault(-1);
     }
 
     /// <summary>
