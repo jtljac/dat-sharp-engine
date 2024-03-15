@@ -1,6 +1,6 @@
 ```
 Header {
-    u8[7]   signature   (Expected Value: C2 B1 44 41 54 54 45 58, ±DATTEX)
+    u8[7]   signature   (Expected Value: B1 44 41 54 54 45 58, ±DATTEX)
     u8      version     (Expected Value: 0x01, 1)
     u32     width
     u32     height
