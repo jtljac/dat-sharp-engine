@@ -1,4 +1,4 @@
-﻿using dat_sharp_engine.Rendering;
+using dat_sharp_engine.Rendering;
 using dat_sharp_engine.Rendering.Vulkan;
 using dat_sharp_engine.Util;
 using Silk.NET.SDL;
@@ -37,8 +37,8 @@ public class DatSharpEngine {
         // Initialise SDL window
         unsafe {
             var windowFlags = renderer.GetWindowFlags();
-            if (ResizableCvar.Value) windowFlags |= (uint) WindowFlags.Resizable;
-            switch (WindowModeCvar.Value) {
+            if (ResizableCvar.value) windowFlags |= (uint) WindowFlags.Resizable;
+            switch (WindowModeCvar.value) {
                 case 1:
                     windowFlags |= (uint) WindowFlags.Fullscreen;
                     break;
@@ -50,15 +50,15 @@ public class DatSharpEngine {
             window = sdl.CreateWindow(appSettings.name,
                 Sdl.WindowposUndefined,
                 Sdl.WindowposUndefined,
-                WindowWidthCvar.Value,
-                WindowHeightCvar.Value,
+                WindowWidthCvar.value,
+                WindowHeightCvar.value,
                 windowFlags);
 
             if (window == null) {
                 throw new Exception("Failed to create window");
             }
         }
-        Logger.EngineLogger.Debug("Created Window ({}, {})", WindowWidthCvar.Value, WindowHeightCvar.Value);
+        Logger.EngineLogger.Debug("Created Window ({}, {})", WindowWidthCvar.value, WindowHeightCvar.value);
 
         Logger.EngineLogger.Info("Initialising Renderer");
         renderer.Initialise();

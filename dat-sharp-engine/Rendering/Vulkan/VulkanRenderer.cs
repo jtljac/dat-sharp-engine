@@ -295,7 +295,7 @@ public class VulkanRenderer : DatRenderer {
                 | deviceIdProperties.DeviceUuid[2] << 1
                 | deviceIdProperties.DeviceUuid[3];
 
-            if (GpuUuidCvar.Value == deviceId) {
+            if (GpuUuidCvar.value == deviceId) {
                 _physicalDevice = gpu;
                 break;
             }
@@ -503,7 +503,7 @@ public class VulkanRenderer : DatRenderer {
             throw new DatRendererInitialisationException("Failed to get surface capabilities");
         }
 
-        var imageCount = Math.Clamp(BufferedFramesCvar.Value,
+        var imageCount = Math.Clamp(BufferedFramesCvar.value,
             surfaceCapabilities.MinImageCount,
             surfaceCapabilities.MaxImageCount == 0 ? uint.MaxValue : surfaceCapabilities.MaxImageCount
         );
@@ -511,11 +511,11 @@ public class VulkanRenderer : DatRenderer {
         var swapchainFormat = GetPreferredSwapchainFormat();
         var presentMode = GetPreferredPresentMode();
         var extent = new Extent2D(
-            Math.Clamp((uint) widthCvar.Value,
+            Math.Clamp((uint) widthCvar.value,
                 surfaceCapabilities.MinImageExtent.Width,
                 surfaceCapabilities.MaxImageExtent.Width
             ),
-            Math.Clamp((uint) heightCvar.Value,
+            Math.Clamp((uint) heightCvar.value,
                 surfaceCapabilities.MinImageExtent.Height,
                 surfaceCapabilities.MaxImageExtent.Height
             )
@@ -591,7 +591,7 @@ public class VulkanRenderer : DatRenderer {
     private void InitialiseFrameData() {
         Logger.EngineLogger.Debug("Initialising Framedata");
 
-        _frameData = new FrameData[BufferedFramesCvar.Value].Select(_ => new FrameData()).ToArray();
+        _frameData = new FrameData[BufferedFramesCvar.value].Select(_ => new FrameData()).ToArray();
 
         foreach (var frameData in _frameData) {
             InitialiseFrameCommands(frameData);
@@ -650,7 +650,7 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseFrameImages() {
         Logger.EngineLogger.Debug("Initialising Frame Images");
-        var drawImageExtent = new Extent3D((uint?) widthCvar.Value, (uint?) heightCvar.Value, 1);
+        var drawImageExtent = new Extent3D((uint?) widthCvar.value, (uint?) heightCvar.value, 1);
 
         const Format format = Format.R16G16B16A16Sfloat;
 
@@ -1352,7 +1352,7 @@ public class VulkanRenderer : DatRenderer {
     private PresentModeKHR GetPreferredPresentMode() {
         var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
 
-        PresentModeKHR[] options = VsyncCvar.Value
+        PresentModeKHR[] options = VsyncCvar.value
             ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
             : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
 
@@ -1400,6 +1400,6 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     /// <returns>The frame data for the current frame</returns>
     private FrameData GetCurrentFrameData() {
-        return _frameData[_currentFrame % BufferedFramesCvar.Value];
+        return _frameData[_currentFrame % BufferedFramesCvar.value];
     }
 }

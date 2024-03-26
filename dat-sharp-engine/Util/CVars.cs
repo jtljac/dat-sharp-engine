@@ -104,7 +104,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterStringCVar(CVar<string> cVar) {
-        _stringCVars[cVar.Name] = cVar;
+        _stringCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -123,7 +123,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterIntCVar(CVar<int> cVar) {
-        _intCVars[cVar.Name] = cVar;
+        _intCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -142,7 +142,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterUintCVar(CVar<uint> cVar) {
-        _uintCVars[cVar.Name] = cVar;
+        _uintCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -161,7 +161,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterFloatCVar(CVar<float> cVar) {
-        _floatCVars[cVar.Name] = cVar;
+        _floatCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -180,7 +180,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterBoolCVar(CVar<bool> cVar) {
-        _boolCVars[cVar.Name] = cVar;
+        _boolCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -199,7 +199,7 @@ public sealed class CVars {
     /// </summary>
     /// <param name="cVar">The CVar to register</param>
     private void RegisterObjectCVar<T>(CVar<T> cVar) {
-        _objectCVars[cVar.Name] = cVar;
+        _objectCVars[cVar.name] = cVar;
     }
 
     /// <summary>
@@ -220,36 +220,61 @@ public sealed class CVars {
 /// <typeparam name="T">The type of the CVar</typeparam>
 public class CVar<T> {
     /// <summary>The initial value of the CVar, used for resetting</summary>
-    public T Initial { get; }
-    /// <summary>The actualvalue of the CVar</summary>
+    public T initial { get; }
+
+    /// <summary>The actual value of the CVar</summary>
     private T _value;
+
     /// <summary>The value of the CVar</summary>
     /// <exception cref="ReadOnlyException">Thrown when trying to set the value of a ReadOnly CVar</exception>
-    public T Value {
+    /// <exception cref="ArgumentException">
+    /// Thrown when trying to set the value and the new value is denied and not corrected by the
+    /// <see cref="CVarValidator{T}"/>
+    /// </exception>
+    public T value {
         get => _value;
         set {
-            if ((Flags & CVarFlags.ReadOnly) != 0) throw new ReadOnlyException();
-            _value = value;
+            if ((flags & CVarFlags.ReadOnly) != 0) throw new ReadOnlyException();
+            _value = _validator != null ? _validator(value) : value;
+            OnChangeEvent?.Invoke(null, this);
         }
     }
 
     /// <summary>The name of the CVar</summary>
-    public string Name { get; }
+    public string name { get; }
     /// <summary>A friendly description for the CVar</summary>
-    public string Description { get; }
+    public string description { get; }
 
     /// <summary>The Category the CVar belongs to, used for sorting when storing</summary>
-    public CVarCategory Category { get; }
+    public CVarCategory category { get; }
     /// <summary>The CVar Flags</summary>
-    public CVarFlags Flags { get; }
+    public CVarFlags flags { get; }
 
-    public CVar(string name, string description, T value, CVarCategory category, CVarFlags flags) {
-        Initial = value;
+    /// <summary>A method used to validate values assigned to the CVar</summary>
+    private readonly CVarValidator<T>? _validator;
+
+    /// <summary>An event fired when successfully changing the CVar value</summary>
+    public event EventHandler<CVar<T>>? OnChangeEvent;
+
+    /// <param name="name">The name of the CVar</param>
+    /// <param name="description">A human readable description of the CVar</param>
+    /// <param name="value">The initial value of the CVar</param>
+    /// <param name="category">The category of the CVar</param>
+    /// <param name="flags">Flags that apply to the CVar</param>
+    /// <param name="validator">
+    ///     An optional validator that can either modify a value before it is applied, or deny it
+    /// </param>
+    /// <param name="onChangeHandler">A method that is called when the CVar is updated</param>
+    public CVar(string name, string description, T value, CVarCategory category, CVarFlags flags, CVarValidator<T>? validator = null, EventHandler<CVar<T>>? onChangeHandler = null) {
+        initial = value;
         _value = value;
-        Name = name;
-        Description = description;
-        Flags = flags;
-        Category = category;
+        this.name = name;
+        this.description = description;
+        this.flags = flags;
+        this.category = category;
+        _validator = validator;
+
+        if (onChangeHandler != null) OnChangeEvent += onChangeHandler;
 
         CVars.Instance.RegisterCVar(this);
     }
@@ -273,6 +298,8 @@ public enum CVarFlags {
 /// Categories for sorting CVars
 /// </summary>
 public enum CVarCategory {
+    /// <summary>CVars for general features</summary>
+    General,
     /// <summary>CVars for the Graphics/Window System</summary>
     Graphics,
     /// <summary>CVars for the Input System</summary>
@@ -282,3 +309,13 @@ public enum CVarCategory {
     /// <summary>CVars that don't fit into any other category</summary>
     Misc,
 }
+
+/// <summary>
+/// A validation method that checks the value being applied to the CVar is valid.
+/// <para/>
+/// When the value is invalid, the validator can choose to correct the value by returning a new value, or to fail by
+/// throwing an <see cref="ArgumentException"/>.
+/// </summary>
+/// <typeparam name="T">The type of the CVar</typeparam>
+/// <exception cref="ArgumentException">Thrown when the <paramref name="newValue"/> is invalid</exception>
+public delegate T CVarValidator<T>(T newValue);
