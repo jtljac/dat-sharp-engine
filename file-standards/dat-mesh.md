@@ -138,7 +138,7 @@ A TypeHint can be decoded with the following method:
     component, and `11` represents a vector with 4 components)
 * The trailing nibble maps to each of the supported primitives:
   * `0000`: UINT
-  * `0001`: SING
+  * `0001`: SINT
   * `0010`: SFLOAT
   * `0011`: UNORM
   * `0100`: SNORM
