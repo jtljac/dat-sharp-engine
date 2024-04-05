@@ -9,15 +9,18 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="HarfBuzzSharp" Version="8.3.0-preview.2.1" />
       <PackageReference Include="NLog" Version="5.2.6" />
       <PackageReference Include="Silk.NET.Maths" Version="2.19.0" />
       <PackageReference Include="Silk.NET.SDL" Version="2.19.0" />
       <PackageReference Include="Silk.NET.Vulkan" Version="2.19.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.19.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.19.0" />
+      <PackageReference Include="SmartFormat.NET" Version="3.3.2" />
     </ItemGroup>
 
     <ItemGroup>
+      <Folder Include="Assets\Primitives\" />
       <Folder Include="Scene\" />
       <Folder Include="UserInterface\" />
     </ItemGroup>

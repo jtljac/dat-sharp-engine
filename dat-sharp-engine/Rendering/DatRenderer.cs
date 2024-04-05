@@ -10,17 +10,8 @@ public abstract class DatRenderer {
     protected static readonly CVar<uint> BufferedFramesCvar = new("iBufferedFrames", "The number of buffered frames to render with", 2, CVarCategory.Graphics, CVarFlags.None);
     protected static readonly CVar<bool> VsyncCvar = new("bVsync", "Enable VSync", true, CVarCategory.Graphics, CVarFlags.None);
 
-    protected readonly CVar<int> widthCvar = CVars.Instance.GetIntCVar("uWindowWidth")!;
-    protected readonly CVar<int> heightCvar = CVars.Instance.GetIntCVar("uWindowHeight")!;
-    /// <summary>
-    /// A reference to the engine that owns this renderer
-    /// </summary>
-    protected readonly DatSharpEngine datSharpEngine;
-    
-    /// <param name="datSharpEngine">The engine that owns this renderer</param>
-    protected DatRenderer(DatSharpEngine datSharpEngine) {
-        this.datSharpEngine = datSharpEngine;
-    }
+    protected readonly CVar<int> widthCvar = CVars.instance.GetIntCVar("uWindowWidth")!;
+    protected readonly CVar<int> heightCvar = CVars.instance.GetIntCVar("uWindowHeight")!;
 
     ~DatRenderer() {
         Cleanup();
@@ -37,7 +28,9 @@ public abstract class DatRenderer {
     /// <summary>
     /// Initialise the renderer
     /// </summary>
-    public abstract void Initialise();
+    public virtual void Initialise() {
+        Logger.EngineLogger.Info("Initialising Renderer");
+    }
 
     /// <summary>
     /// Draw a frame with the renderer

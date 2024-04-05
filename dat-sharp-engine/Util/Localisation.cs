@@ -11,7 +11,7 @@ namespace dat_sharp_engine.Util;
 /// Game <i>by David Taylor</i></a>
 /// </summary>
 public static class Localisation {
-    private static CVar<string> LocaleCVar = new("sLocale", "The locale code currently", "en-US", CVarCategory.General, CVarFlags.None,
+    private static CVar<string> LocaleCVar = new("sLocale", "The locale code currently being used for localisation", "en-US", CVarCategory.General, CVarFlags.None,
         value => {
             try {
                 // ReSharper disable once ReturnValueOfPureMethodIsNotUsed

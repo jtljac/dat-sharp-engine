@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Data;
 
 namespace dat_sharp_engine.Util;
@@ -37,7 +36,7 @@ public sealed class CVars {
     private readonly Dictionary<string, object> _objectCVars = new();
 
     /// <summary>Singleton instance</summary>
-    public static CVars Instance { get; } = new();
+    public static CVars instance { get; } = new();
 
     private CVars() {}
 
@@ -276,7 +275,7 @@ public class CVar<T> {
 
         if (onChangeHandler != null) OnChangeEvent += onChangeHandler;
 
-        CVars.Instance.RegisterCVar(this);
+        CVars.instance.RegisterCVar(this);
     }
 }
 
@@ -292,6 +291,8 @@ public enum CVarFlags {
     Debug = 0b0010,
     /// <summary>The CVar should be replicated from server to client</summary>
     Replicated = 0b0100,
+    /// <summary>Changes to the CVar will not be reflected until after a restart</summary>
+    RequiresRestart = 0b1000
 }
 
 /// <summary>
