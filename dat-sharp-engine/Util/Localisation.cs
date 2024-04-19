@@ -11,7 +11,7 @@ namespace dat_sharp_engine.Util;
 /// Game <i>by David Taylor</i></a>
 /// </summary>
 public static class Localisation {
-    private static CVar<string> LocaleCVar = new("sLocale", "The locale code currently", "en-US", CVarCategory.General, CVarFlags.None,
+    private static readonly CVar<string> LocaleCVar = new("sLocale", "The locale code currently being used for localisation", "en-US", CVarCategory.Core, CVarFlags.None,
         value => {
             try {
                 // ReSharper disable once ReturnValueOfPureMethodIsNotUsed
@@ -33,7 +33,9 @@ public static class Localisation {
     /// <summary>A dictionary of string translations</summary>
     private static readonly Dictionary<string, string> Strings = new();
 
-    static Localisation() {
+    static Localisation() {}
+
+    public static void Initialise() {
         SetLocalisation(CultureInfo.GetCultureInfo(LocaleCVar.value));
     }
 

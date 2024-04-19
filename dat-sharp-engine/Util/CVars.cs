@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Data;
 
 namespace dat_sharp_engine.Util;
@@ -37,7 +36,11 @@ public sealed class CVars {
     private readonly Dictionary<string, object> _objectCVars = new();
 
     /// <summary>Singleton instance</summary>
-    public static CVars Instance { get; } = new();
+    public static CVars instance { get; } = new();
+
+    public void Initialise() {
+        // TODO: Load in CVars from files, update registered cvars, create map of remaining ones to apply to newly registered CVars
+    }
 
     private CVars() {}
 
@@ -212,6 +215,13 @@ public sealed class CVars {
     public CVar<T>? GetObjectCVar<T>(string cVarName) {
         return _objectCVars.TryGetValue(cVarName, out var value) ? value as CVar<T> : null;
     }
+
+    /// <summary>
+    /// Save Dirty CVars to disk
+    /// </summary>
+    public void Save() {
+        // TODO: Save
+    }
 }
 
 /// <summary>
@@ -276,7 +286,7 @@ public class CVar<T> {
 
         if (onChangeHandler != null) OnChangeEvent += onChangeHandler;
 
-        CVars.Instance.RegisterCVar(this);
+        CVars.instance.RegisterCVar(this);
     }
 }
 
@@ -285,21 +295,25 @@ public class CVar<T> {
 /// </summary>
 [Flags]
 public enum CVarFlags {
-    None = 0b0000,
+    None = 0b00000000,
     /// <summary>Enforces that the CVar cannot change value</summary>
-    ReadOnly = 0b0001,
+    ReadOnly = 0b00000001,
     /// <summary>The CVar is for debug purposes</summary>
-    Debug = 0b0010,
+    Debug = 0b00000010,
     /// <summary>The CVar should be replicated from server to client</summary>
-    Replicated = 0b0100,
+    Replicated = 0b00000100,
+    /// <summary>The CVar can be written to disk on change with a call to <see cref="CVar{T}.Save()"/></summary>
+    Persistent = 0b00001000,
+    /// <summary>Changes to the CVar will not be reflected until after a restart, force enables <see cref="Persistent"/> flag</summary>
+    RequiresRestart = 0b00011000
 }
 
 /// <summary>
 /// Categories for sorting CVars
 /// </summary>
 public enum CVarCategory {
-    /// <summary>CVars for general features</summary>
-    General,
+    /// <summary>CVars important to the core functioning of the engine</summary>
+    Core,
     /// <summary>CVars for the Graphics/Window System</summary>
     Graphics,
     /// <summary>CVars for the Input System</summary>
