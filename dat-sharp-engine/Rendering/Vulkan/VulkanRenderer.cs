@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 #endif
 
-using System.Collections;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using dat_sharp_engine.Collection;
@@ -105,8 +104,8 @@ public class VulkanRenderer : DatRenderer {
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
     private AllocatedMesh _tempMesh;
 
-    public VulkanRenderer(DatSharpEngine datSharpEngine) : base(datSharpEngine) {
-        _sdl = this.datSharpEngine.sdl;
+    public VulkanRenderer() {
+        _sdl = DatSharpEngine.Instance.sdl;
     }
 
     public override uint GetWindowFlags() {
@@ -119,6 +118,7 @@ public class VulkanRenderer : DatRenderer {
     /* --------------------------------------- */
 
     public override void Initialise() {
+        base.Initialise();
         Logger.EngineLogger.Info("Initialising Vulkan");
 
         InitialiseVulkanInstance();
@@ -141,7 +141,7 @@ public class VulkanRenderer : DatRenderer {
     /// <summary>
     /// Initialise the vulkan instance and debug validation layers
     /// </summary>
-    /// <exception cref="DatRendererInitialisationException">Thrown when the instance fails to initialise</exception>
+    /// <exception cref="DatRendererException">Thrown when the instance fails to initialise</exception>
     private unsafe void InitialiseVulkanInstance() {
         Logger.EngineLogger.Debug("Initialising Vulkan instance");
 
@@ -161,7 +161,7 @@ public class VulkanRenderer : DatRenderer {
 
 
         var engineName = SilkMarshal.StringToPtr("DatSharpEngine");
-        var applicationName = SilkMarshal.StringToPtr(datSharpEngine.appSettings.name);
+        var applicationName = SilkMarshal.StringToPtr(DatSharpEngine.Instance.appSettings.name);
 
         ApplicationInfo appInfo = new() {
             SType = StructureType.ApplicationInfo,
@@ -170,9 +170,9 @@ public class VulkanRenderer : DatRenderer {
                 EngineConstants.ENGINE_VERSION.Minor,
                 EngineConstants.ENGINE_VERSION.Patch
             ),
-            ApplicationVersion = Vk.MakeVersion(datSharpEngine.appSettings.version.Major,
-                datSharpEngine.appSettings.version.Minor,
-                datSharpEngine.appSettings.version.Patch
+            ApplicationVersion = Vk.MakeVersion(DatSharpEngine.Instance.appSettings.version.Major,
+                DatSharpEngine.Instance.appSettings.version.Minor,
+                DatSharpEngine.Instance.appSettings.version.Patch
             ),
             PEngineName = (byte*) engineName,
             PApplicationName = (byte*) applicationName
@@ -218,13 +218,13 @@ public class VulkanRenderer : DatRenderer {
         SilkMarshal.Free(applicationName);
 
         if (result != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to initialise vulkan");
+            throw new DatRendererException("Failed to initialise vulkan");
         }
 
         // Setup debug stuff
 #if DEBUG
         if (!_vk.TryGetInstanceExtension(_instance, out _extDebugUtils))
-            throw new DatRendererInitialisationException($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
+            throw new DatRendererException($"Could not get instance extension {ExtDebugUtils.ExtensionName}");
 
         _extDebugUtils!.CreateDebugUtilsMessenger(_instance, debugInfo, null, out _debugUtilsMessenger);
 #endif
@@ -234,7 +234,7 @@ public class VulkanRenderer : DatRenderer {
     /// Get the required instance extensions
     /// </summary>
     /// <returns>A list of instance extensions to use</returns>
-    /// <exception cref="DatRendererInitialisationException">
+    /// <exception cref="DatRendererException">
     /// Thrown when the engine fails to get the required instance extensions from SDL
     /// </exception>
     private unsafe ISet<string> GetInstanceExtensions() {
@@ -244,12 +244,12 @@ public class VulkanRenderer : DatRenderer {
         };
 
         uint pCount = 0;
-        _sdl.VulkanGetInstanceExtensions(datSharpEngine.window, ref pCount, (byte**) null);
+        _sdl.VulkanGetInstanceExtensions(DatSharpEngine.Instance.window, ref pCount, (byte**) null);
 
         var names = new string[pCount];
 
-        if (_sdl.VulkanGetInstanceExtensions(datSharpEngine.window, ref pCount, names) != SdlBool.True) {
-            throw new DatRendererInitialisationException("Failed to get required instance extensions");
+        if (_sdl.VulkanGetInstanceExtensions(DatSharpEngine.Instance.window, ref pCount, names) != SdlBool.True) {
+            throw new DatRendererException("Failed to get required instance extensions");
         }
 
         extensions.UnionWith(names);
@@ -264,7 +264,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (!CheckValidationLayerSupport(layers)) {
-            throw new DatRendererInitialisationException("Requested validation layers were missing");
+            throw new DatRendererException("Requested validation layers were missing");
         }
 
         return layers;
@@ -358,7 +358,7 @@ public class VulkanRenderer : DatRenderer {
     /// <summary>
     /// Initialise the logical device
     /// </summary>
-    /// <exception cref="DatRendererInitialisationException">Thrown when creating the physical device fails</exception>
+    /// <exception cref="DatRendererException">Thrown when creating the physical device fails</exception>
     private unsafe void InitialiseVulkanDevice() {
         Logger.EngineLogger.Debug("Initialising Vulkan Logical Device");
 
@@ -434,7 +434,7 @@ public class VulkanRenderer : DatRenderer {
                 };
 
                 if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
-                    throw new DatRendererInitialisationException("Failed to create device");
+                    throw new DatRendererException("Failed to create device");
                 }
 
                 // We always want the graphics queue to get the 0 index queue, so we gotta do this weird unwind when
@@ -470,37 +470,37 @@ public class VulkanRenderer : DatRenderer {
     /// <summary>
     /// Initialise the surface API and Surface
     /// </summary>
-    /// <exception cref="DatRendererInitialisationException">Thrown when the KHRSurface API fails to be acquired</exception>
+    /// <exception cref="DatRendererException">Thrown when the KHRSurface API fails to be acquired</exception>
     private unsafe void InitialiseSurface() {
         Logger.EngineLogger.Debug("Initialising Vulkan Surface");
 
         if (!_vk.TryGetInstanceExtension(_instance, out _khrSurface)) {
-            throw new DatRendererInitialisationException($"Could not get Instance extension {KhrSurface.ExtensionName}");
+            throw new DatRendererException($"Could not get Instance extension {KhrSurface.ExtensionName}");
         }
 
         VkNonDispatchableHandle handle;
-        _sdl.VulkanCreateSurface(datSharpEngine.window, _instance.ToHandle(), &handle);
+        _sdl.VulkanCreateSurface(DatSharpEngine.Instance.window, _instance.ToHandle(), &handle);
         _surface = handle.ToSurface();
     }
 
     /// <summary>
     /// Initialise the swapchain api and swapchain
     /// </summary>
-    /// <exception cref="DatRendererInitialisationException">
+    /// <exception cref="DatRendererException">
     /// Thrown when the Swapchain API is unavailable, or the swapchain fails to be created
     /// </exception>
     private unsafe void InitialiseSwapchain() {
         Logger.EngineLogger.Debug("Initialising Swapchain");
 
         if (!_vk.TryGetDeviceExtension(_instance, _device, out _khrSwapchain)) {
-            throw new DatRendererInitialisationException($"Could not get device extension {KhrSwapchain.ExtensionName}");
+            throw new DatRendererException($"Could not get device extension {KhrSwapchain.ExtensionName}");
         }
 
         if (_khrSurface!.GetPhysicalDeviceSurfaceCapabilities(_physicalDevice,
                 _surface,
                 out var surfaceCapabilities
             ) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to get surface capabilities");
+            throw new DatRendererException("Failed to get surface capabilities");
         }
 
         var imageCount = Math.Clamp(BufferedFramesCvar.value,
@@ -540,7 +540,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_khrSwapchain!.CreateSwapchain(_device, swapchainInfo, null, out _swapchain) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create swapchain");
+            throw new DatRendererException("Failed to create swapchain");
         }
 
         _swapchainFormat = swapchainFormat.Format;
@@ -580,7 +580,7 @@ public class VulkanRenderer : DatRenderer {
             };
 
             if (_vk.CreateImageView(_device, imageViewInfo, null, out swapchainData.imageView) != Result.Success) {
-                throw new DatRendererInitialisationException($"Failed to create swapchain imageView");
+                throw new DatRendererException($"Failed to create swapchain imageView");
             }
         }
     }
@@ -603,7 +603,7 @@ public class VulkanRenderer : DatRenderer {
     /// Setup the command structure for the given frame
     /// </summary>
     /// <param name="frameData">The frame being setup</param>
-    /// <exception cref="DatRendererInitialisationException">
+    /// <exception cref="DatRendererException">
     /// Thrown when Vulkan fails to create any of the command structures
     /// </exception>
     private unsafe void InitialiseFrameCommands(FrameData frameData) {
@@ -614,13 +614,13 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out frameData.commandPool) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create swapchain command pool");
+            throw new DatRendererException("Failed to create swapchain command pool");
         }
 
         var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(frameData.commandPool, 1);
 
         if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out frameData.commandBuffer) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create swapchain command buffer");
+            throw new DatRendererException("Failed to create swapchain command buffer");
         }
     }
 
@@ -628,7 +628,7 @@ public class VulkanRenderer : DatRenderer {
     /// Setup the synchronisation structures for the given frame
     /// </summary>
     /// <param name="frameData">The frame being setup</param>
-    /// <exception cref="DatRendererInitialisationException">
+    /// <exception cref="DatRendererException">
     /// Thrown when vulkan fails to create any of the synchronisation structures
     /// </exception>
     private unsafe void InitialiseFrameSyncStructures(FrameData frameData) {
@@ -636,15 +636,15 @@ public class VulkanRenderer : DatRenderer {
         var semaphoreInfo = VkShortcuts.CreateSemaphoreCreateInfo();
 
         if (_vk.CreateFence(_device, fenceInfo, null, out frameData.renderFence) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create frame render fence");
+            throw new DatRendererException("Failed to create frame render fence");
         }
 
         if (_vk.CreateSemaphore(_device, semaphoreInfo, null, out frameData.swapchainSemaphore) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create frame swapchain semaphore");
+            throw new DatRendererException("Failed to create frame swapchain semaphore");
         }
 
         if (_vk.CreateSemaphore(_device, semaphoreInfo, null, out frameData.renderSemaphore) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create frame render semaphore");
+            throw new DatRendererException("Failed to create frame render semaphore");
         }
     }
 
@@ -670,7 +670,7 @@ public class VulkanRenderer : DatRenderer {
             VkShortcuts.CreateImageViewCreateInfo(format, image, ImageAspectFlags.ColorBit);
 
         if (_vk.CreateImageView(_device, imageViewInfo, null, out var imageView) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create render image view");
+            throw new DatRendererException("Failed to create render image view");
         }
 
         _drawImage = new AllocatedImage(image, imageView, allocation, drawImageExtent, format);
@@ -686,26 +686,26 @@ public class VulkanRenderer : DatRenderer {
 
         // Graphics Queue
         if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immGraphicsCommandPool) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate graphics command pool");
+            throw new DatRendererException("Failed to create immediate graphics command pool");
         }
 
         var bufferAllocateInfo = VkShortcuts.CreateCommandBufferAllocateInfo(_immGraphicsCommandPool, 1);
 
         if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immGraphicsCommandBuffer) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate graphics command buffer");
+            throw new DatRendererException("Failed to create immediate graphics command buffer");
         }
 
         // Transfer Queue
         commandPoolInfo.QueueFamilyIndex = _transferQueueIndex;
 
         if (_vk.CreateCommandPool(_device, commandPoolInfo, null, out _immTransferCommandPool) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate transfer command pool");
+            throw new DatRendererException("Failed to create immediate transfer command pool");
         }
 
         bufferAllocateInfo.CommandPool = _immTransferCommandPool;
 
         if (_vk.AllocateCommandBuffers(_device, bufferAllocateInfo, out _immTransferCommandBuffer) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create immediate transfer buffer");
+            throw new DatRendererException("Failed to create immediate transfer buffer");
         }
     }
 
@@ -713,7 +713,7 @@ public class VulkanRenderer : DatRenderer {
         var fenceInfo = VkShortcuts.CreateFenceCreateInfo(FenceCreateFlags.SignaledBit);
 
         if (_vk.CreateFence(_device, fenceInfo, null, out _immFence) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to create frame render fence");
+            throw new DatRendererException("Failed to create frame render fence");
         }
     }
 
@@ -773,7 +773,7 @@ public class VulkanRenderer : DatRenderer {
             computeLayout.PPushConstantRanges = &pushConstant;
 
             if (_vk.CreatePipelineLayout(_device, computeLayout, null, out _gradientPipelineLayout) != Result.Success) {
-                throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+                throw new DatRendererException("Failed to initialise gradient Pipeline Layout");
             }
         }
 
@@ -800,7 +800,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_vk.CreateComputePipelines(_device, default, 1, computePipelineInfo, null, out _gradientPipeline) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+            throw new DatRendererException("Failed to initialise gradient Pipeline Layout");
         }
 
         Marshal.FreeHGlobal(pEntryPoint);
@@ -825,7 +825,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_vk.CreatePipelineLayout(_device, pipelineLayout, null, out _trianglePipelineLayout) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+            throw new DatRendererException("Failed to initialise gradient Pipeline Layout");
         }
 
         _trianglePipeline = new PipelineBuilder(_vk, _device)
@@ -870,7 +870,7 @@ public class VulkanRenderer : DatRenderer {
         };
 
         if (_vk.CreatePipelineLayout(_device, pipelineLayout, null, out _trianglePipelineLayout) != Result.Success) {
-            throw new DatRendererInitialisationException("Failed to initialise gradient Pipeline Layout");
+            throw new DatRendererException("Failed to initialise gradient Pipeline Layout");
         }
 
         _trianglePipeline = new PipelineBuilder(_vk, _device)
@@ -932,7 +932,7 @@ public class VulkanRenderer : DatRenderer {
             3
         ];
 
-        _tempMesh = UploadMesh(new Mesh(vertices, indices));
+        // _tempMesh = UploadMesh(new Mesh(vertices, indices));
     }
 
     /* --------------------------------------- */
@@ -1150,8 +1150,8 @@ public class VulkanRenderer : DatRenderer {
     /* --------------------------------------- */
 
     public override unsafe AllocatedMesh UploadMesh(Mesh mesh) {
-        var vertexSize = (ulong) (mesh.vertices.Length * sizeof(Vertex));
-        var indexSize = (ulong) (mesh.indices.Length * sizeof(uint));
+        var vertexSize = (ulong) (mesh.vertices!.Length);
+        var indexSize = (ulong) (mesh.indices!.Length * sizeof(uint));
 
         var vertexBuffer = CreateBuffer(vertexSize,
             BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit |
@@ -1175,7 +1175,7 @@ public class VulkanRenderer : DatRenderer {
 
         var bufferPtr = stagingBuffer.allocation.Map();
 
-        fixed(Vertex* vertex = mesh.vertices) {
+        fixed(byte* vertex = mesh.vertices) {
             Buffer.MemoryCopy(vertex, bufferPtr.ToPointer(), (ulong) stagingBuffer.allocation.Size, vertexSize);
         }
 
@@ -1207,7 +1207,7 @@ public class VulkanRenderer : DatRenderer {
 
         var newMesh = new AllocatedMesh(indexBuffer, vertexBuffer, vertexAddress);
 
-        mesh.GpuIndex = _meshList.Insert(newMesh);
+        mesh.gpuIndex = _meshList.Insert(newMesh);
         return newMesh;
     }
 
