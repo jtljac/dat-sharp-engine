@@ -105,7 +105,7 @@ public class VulkanRenderer : DatRenderer {
     private AllocatedMesh _tempMesh;
 
     public VulkanRenderer() {
-        _sdl = DatSharpEngine.Instance.sdl;
+        _sdl = DatSharpEngine.instance.sdl;
     }
 
     public override uint GetWindowFlags() {
@@ -161,18 +161,18 @@ public class VulkanRenderer : DatRenderer {
 
 
         var engineName = SilkMarshal.StringToPtr("DatSharpEngine");
-        var applicationName = SilkMarshal.StringToPtr(DatSharpEngine.Instance.appSettings.name);
+        var applicationName = SilkMarshal.StringToPtr(DatSharpEngine.instance.appSettings.name);
 
         ApplicationInfo appInfo = new() {
             SType = StructureType.ApplicationInfo,
             ApiVersion = Vk.Version13,
-            EngineVersion = Vk.MakeVersion(EngineConstants.ENGINE_VERSION.Major,
-                EngineConstants.ENGINE_VERSION.Minor,
-                EngineConstants.ENGINE_VERSION.Patch
+            EngineVersion = Vk.MakeVersion(EngineConstants.EngineVersion.Major,
+                EngineConstants.EngineVersion.Minor,
+                EngineConstants.EngineVersion.Patch
             ),
-            ApplicationVersion = Vk.MakeVersion(DatSharpEngine.Instance.appSettings.version.Major,
-                DatSharpEngine.Instance.appSettings.version.Minor,
-                DatSharpEngine.Instance.appSettings.version.Patch
+            ApplicationVersion = Vk.MakeVersion(DatSharpEngine.instance.appSettings.version.Major,
+                DatSharpEngine.instance.appSettings.version.Minor,
+                DatSharpEngine.instance.appSettings.version.Patch
             ),
             PEngineName = (byte*) engineName,
             PApplicationName = (byte*) applicationName
@@ -244,11 +244,11 @@ public class VulkanRenderer : DatRenderer {
         };
 
         uint pCount = 0;
-        _sdl.VulkanGetInstanceExtensions(DatSharpEngine.Instance.window, ref pCount, (byte**) null);
+        _sdl.VulkanGetInstanceExtensions(DatSharpEngine.instance.window, ref pCount, (byte**) null);
 
         var names = new string[pCount];
 
-        if (_sdl.VulkanGetInstanceExtensions(DatSharpEngine.Instance.window, ref pCount, names) != SdlBool.True) {
+        if (_sdl.VulkanGetInstanceExtensions(DatSharpEngine.instance.window, ref pCount, names) != SdlBool.True) {
             throw new DatRendererException("Failed to get required instance extensions");
         }
 
@@ -295,7 +295,7 @@ public class VulkanRenderer : DatRenderer {
                 | deviceIdProperties.DeviceUuid[2] << 1
                 | deviceIdProperties.DeviceUuid[3];
 
-            if (GpuUuidCvar.value == deviceId) {
+            if (EngineCVars.GpuUuidCvar.value == deviceId) {
                 _physicalDevice = gpu;
                 break;
             }
@@ -479,7 +479,7 @@ public class VulkanRenderer : DatRenderer {
         }
 
         VkNonDispatchableHandle handle;
-        _sdl.VulkanCreateSurface(DatSharpEngine.Instance.window, _instance.ToHandle(), &handle);
+        _sdl.VulkanCreateSurface(DatSharpEngine.instance.window, _instance.ToHandle(), &handle);
         _surface = handle.ToSurface();
     }
 
@@ -503,7 +503,7 @@ public class VulkanRenderer : DatRenderer {
             throw new DatRendererException("Failed to get surface capabilities");
         }
 
-        var imageCount = Math.Clamp(BufferedFramesCvar.value,
+        var imageCount = Math.Clamp(EngineCVars.BufferedFramesCvar.value,
             surfaceCapabilities.MinImageCount,
             surfaceCapabilities.MaxImageCount == 0 ? uint.MaxValue : surfaceCapabilities.MaxImageCount
         );
@@ -511,11 +511,11 @@ public class VulkanRenderer : DatRenderer {
         var swapchainFormat = GetPreferredSwapchainFormat();
         var presentMode = GetPreferredPresentMode();
         var extent = new Extent2D(
-            Math.Clamp((uint) widthCvar.value,
+            Math.Clamp((uint) EngineCVars.WindowWidthCvar.value,
                 surfaceCapabilities.MinImageExtent.Width,
                 surfaceCapabilities.MaxImageExtent.Width
             ),
-            Math.Clamp((uint) heightCvar.value,
+            Math.Clamp((uint) EngineCVars.WindowHeightCvar.value,
                 surfaceCapabilities.MinImageExtent.Height,
                 surfaceCapabilities.MaxImageExtent.Height
             )
@@ -591,7 +591,7 @@ public class VulkanRenderer : DatRenderer {
     private void InitialiseFrameData() {
         Logger.EngineLogger.Debug("Initialising Framedata");
 
-        _frameData = new FrameData[BufferedFramesCvar.value].Select(_ => new FrameData()).ToArray();
+        _frameData = new FrameData[EngineCVars.BufferedFramesCvar.value].Select(_ => new FrameData()).ToArray();
 
         foreach (var frameData in _frameData) {
             InitialiseFrameCommands(frameData);
@@ -650,7 +650,7 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseFrameImages() {
         Logger.EngineLogger.Debug("Initialising Frame Images");
-        var drawImageExtent = new Extent3D((uint?) widthCvar.value, (uint?) heightCvar.value, 1);
+        var drawImageExtent = new Extent3D((uint?) EngineCVars.WindowWidthCvar.value, (uint?) EngineCVars.WindowHeightCvar.value, 1);
 
         const Format format = Format.R16G16B16A16Sfloat;
 
@@ -1352,7 +1352,7 @@ public class VulkanRenderer : DatRenderer {
     private PresentModeKHR GetPreferredPresentMode() {
         var formats = VkHelper.GetDeviceSurfacePresentModes(_khrSurface!, _physicalDevice, _surface);
 
-        PresentModeKHR[] options = VsyncCvar.value
+        PresentModeKHR[] options = EngineCVars.VsyncCvar.value
             ? [PresentModeKHR.FifoRelaxedKhr, PresentModeKHR.FifoKhr]
             : [PresentModeKHR.ImmediateKhr, PresentModeKHR.FifoKhr];
 
@@ -1400,6 +1400,6 @@ public class VulkanRenderer : DatRenderer {
     /// </summary>
     /// <returns>The frame data for the current frame</returns>
     private FrameData GetCurrentFrameData() {
-        return _frameData[_currentFrame % BufferedFramesCvar.value];
+        return _frameData[_currentFrame % EngineCVars.BufferedFramesCvar.value];
     }
 }

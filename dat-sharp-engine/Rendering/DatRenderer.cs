@@ -5,14 +5,6 @@ using dat_sharp_engine.Util;
 namespace dat_sharp_engine.Rendering;
 
 public abstract class DatRenderer {
-    // CVars
-    protected static readonly CVar<int> GpuUuidCvar = new("iGpuUuid", "The UUID of the GPU to use for rendering", 0, CVarCategory.Graphics, CVarFlags.None);
-    protected static readonly CVar<uint> BufferedFramesCvar = new("iBufferedFrames", "The number of buffered frames to render with", 2, CVarCategory.Graphics, CVarFlags.None);
-    protected static readonly CVar<bool> VsyncCvar = new("bVsync", "Enable VSync", true, CVarCategory.Graphics, CVarFlags.None);
-
-    protected readonly CVar<int> widthCvar = CVars.instance.GetIntCVar("uWindowWidth")!;
-    protected readonly CVar<int> heightCvar = CVars.instance.GetIntCVar("uWindowHeight")!;
-
     static DatRenderer() { }
 
     ~DatRenderer() {

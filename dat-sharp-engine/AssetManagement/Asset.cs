@@ -20,7 +20,7 @@ public abstract class Asset {
     /// If this week reference is invalid, then the file is assumed to have been reloaded, and will be re-fetched by the
     /// path. This functionality is not supported if the file has more than one reference.
     /// </summary>
-    private WeakReference<DVfsFile>? _file;
+    protected WeakReference<DVfsFile>? _file;
 
     /// <summary>
     /// If <c>true</c>, this asset does not exist on the disk and therefore has no loading or unloading functionality
@@ -29,6 +29,7 @@ public abstract class Asset {
 
     private volatile AssetLoadState _loadState;
     private volatile Task? _loadTask;
+    private ReaderWriterLockSlim _lock = new();
 
     /// <summary>
     /// Base initialiser for virtual file
@@ -60,13 +61,27 @@ public abstract class Asset {
             path
         );
     }
+
+    /// <summary>
+    /// The load state of the asset
+    /// </summary>
+    // ReSharper disable once InconsistentlySynchronizedField
     public AssetLoadState loadState => _loadState;
 
     ~Asset() {
         UnloadAssetImpl();
     }
 
+    /// <summary>
+    /// Request to load an asset
+    /// </summary>
+    /// <returns>
+    ///     A <see cref="Task"/> representing the state of the request. If the asset is already loaded, then a completed
+    ///     <see cref="Task"/> will be returned. Repeated calls to this method will return the same <see cref="Task"/>
+    ///     object.
+    /// </returns>
     public Task LoadAsset() {
+        // The action performed to load the file
         void LoadAction() {
             if (_loadState != AssetLoadState.Loading) return;
             var rawFile = GetRawFile();
@@ -102,6 +117,14 @@ public abstract class Asset {
         }
     }
 
+    /// <summary>
+    /// Request to unload an asset
+    /// </summary>
+    /// <returns>
+    ///     A <see cref="Task"/> representing the state of the request. If the asset isn't loaded, then a completed
+    ///     <see cref="Task"/> will be returned. Repeated calls to this method will return the same <see cref="Task"/>
+    ///     object.
+    /// </returns>
     public Task UnloadAsset() {
         if (isVirtual) return Task.CompletedTask;
         lock (this) {
@@ -128,6 +151,10 @@ public abstract class Asset {
         }
     }
 
+    /// <summary>
+    /// Get the raw file this asset represents
+    /// </summary>
+    /// <returns>The DVFS file represented by this asset</returns>
     protected DVfsFile? GetRawFile() {
         if (isVirtual) return null;
 
@@ -139,7 +166,14 @@ public abstract class Asset {
         return file;
     }
 
+    /// <summary>
+    /// The implementation to load the asset from a stream
+    /// </summary>
+    /// <param name="assetData"></param>
     protected abstract void LoadAssetImpl(Stream assetData);
 
+    /// <summary>
+    ///  The implementation to unload the asset
+    /// </summary>
     protected abstract void UnloadAssetImpl();
 }

@@ -4,25 +4,28 @@ using dat_sharp_engine.Rendering.Vulkan;
 using dat_sharp_engine.Threading;
 using dat_sharp_engine.Util;
 using Silk.NET.SDL;
-using Thread = System.Threading.Thread;
 
 namespace dat_sharp_engine;
 
+/// <summary>
+/// The entry point of the engine
+/// </summary>
 public class DatSharpEngine {
-    // CVars
-    private static readonly CVar<bool> ResizableCvar = new("bWindowResizable", "Allow resizing the game window", false, CVarCategory.Graphics, CVarFlags.None);
-    private static readonly CVar<int> WindowModeCvar = new("eWindowMode", "The window mode, 0 for windowed, 1 for fullscreen, 2 for borderless", 0, CVarCategory.Graphics, CVarFlags.None);
-    private static readonly CVar<int> WindowWidthCvar = new("uWindowWidth", "The width of the game window", 1366, CVarCategory.Graphics, CVarFlags.None);
-    private static readonly CVar<int> WindowHeightCvar = new("uWindowHeight", "The height of the game window", 768, CVarCategory.Graphics, CVarFlags.None);
-
+    /// <summary>The engines reference to SDL2</summary>
     internal readonly Sdl sdl = Sdl.GetApi();
 
-    public static DatSharpEngine Instance { get; } = new();
+    /// <summary>The static instance of the engine</summary>
+    public static DatSharpEngine instance { get; } = new();
+    /// <summary>The instance of the renderer being used by the engine</summary>
     public DatRenderer? renderer { get; private set; }
+    /// <summary>The application settings defining game to the engine</summary>
     public ApplicationSettings? appSettings { get; private set; }
+    
+    /// <summary>The window the game is in</summary>
     public unsafe Window* window;
 
-    public bool ShouldClose { get; set; } = false;
+    /// <summary>Whether he game should try to close</summary>
+    private bool shouldClose { get; set; }
 
     static DatSharpEngine() { }
 
@@ -51,15 +54,20 @@ public class DatSharpEngine {
         Localisation.Initialise();
     }
 
+    /// <summary>
+    /// Initialise SDL
+    /// </summary>
+    /// <exception cref="SdlException">Thrown if SDL fails to initialise</exception>
+    /// <exception cref="DatEngineException">Thrown if the engine is unable to get a window from SDL</exception>
     private unsafe void InitialiseSdl() {
         Logger.EngineLogger.Debug("Initialising SDL");
         if (sdl.Init(Sdl.InitEverything) != 0) {
-            throw new Exception("Failed to initialise SDL");
+            throw new SdlException("Failed to initialise SDL");
         }
 
         var windowFlags = renderer!.GetWindowFlags();
-        if (ResizableCvar.value) windowFlags |= (uint) WindowFlags.Resizable;
-        switch (WindowModeCvar.value) {
+        if (EngineCVars.ResizableCvar.value) windowFlags |= (uint) WindowFlags.Resizable;
+        switch (EngineCVars.WindowModeCvar.value) {
             case 1:
                 windowFlags |= (uint) WindowFlags.Fullscreen;
                 break;
@@ -71,23 +79,27 @@ public class DatSharpEngine {
         window = sdl.CreateWindow(appSettings!.name,
             Sdl.WindowposUndefined,
             Sdl.WindowposUndefined,
-            WindowWidthCvar.value,
-            WindowHeightCvar.value,
+            EngineCVars.WindowWidthCvar.value,
+            EngineCVars.WindowHeightCvar.value,
             windowFlags);
 
         if (window == null) {
             throw new DatEngineException("Failed to create window");
         }
 
-        Logger.EngineLogger.Debug("Created Window ({}, {})", WindowWidthCvar.value, WindowHeightCvar.value);
+        Logger.EngineLogger.Debug("Created Window ({}, {})", EngineCVars.WindowWidthCvar.value, EngineCVars.WindowHeightCvar.value);
     }
 
+    /// <summary>
+    /// Start the main loop and hand off the application to the engine
+    /// </summary>
+    /// <exception cref="DatEngineException">Thrown when there is a failure with the engine</exception>
     public void StartLoop() {
-        if (appSettings == null) throw new DatEngineException("Engine Loop Started without setting up");
+        if (appSettings == null) throw new DatEngineException("Engine Loop Started without first initialising");
         Logger.EngineLogger.Info("Starting main loop");
 
         var lastTime = sdl.GetTicks64();
-        while (!ShouldClose) {
+        while (!shouldClose) {
             var currentTime = sdl.GetTicks64();
             var deltaTime = (currentTime - lastTime) / 1000f;
             
@@ -108,5 +120,12 @@ public class DatSharpEngine {
 
         sdl.Quit();
         Logger.EngineLogger.Debug("Bye!");
+    }
+
+    /// <summary>
+    /// Tell the engine to shutdown gracefully
+    /// </summary>
+    public void Exit() {
+        shouldClose = true;
     }
 }

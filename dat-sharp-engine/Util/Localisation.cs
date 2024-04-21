@@ -11,22 +11,6 @@ namespace dat_sharp_engine.Util;
 /// Game <i>by David Taylor</i></a>
 /// </summary>
 public static class Localisation {
-    private static readonly CVar<string> LocaleCVar = new("sLocale", "The locale code currently being used for localisation", "en-US", CVarCategory.Core, CVarFlags.None,
-        value => {
-            try {
-                // ReSharper disable once ReturnValueOfPureMethodIsNotUsed
-                CultureInfo.GetCultureInfo(LocaleCVar.value);
-
-                return value;
-            }
-            catch (CultureNotFoundException e) {
-                throw new ArgumentException("Unsupported Localisation", e);
-            }
-        },
-        (_, cVar) => {
-            SetLocalisation(CultureInfo.GetCultureInfo(cVar.value));
-        });
-
     /// <summary>The currently selected locale culture</summary>
     public static CultureInfo localeCulture { get; private set; }
 
@@ -36,7 +20,10 @@ public static class Localisation {
     static Localisation() {}
 
     public static void Initialise() {
-        SetLocalisation(CultureInfo.GetCultureInfo(LocaleCVar.value));
+        SetLocalisation(CultureInfo.GetCultureInfo(EngineCVars.LocaleCVar.value));
+        EngineCVars.LocaleCVar.OnChangeEvent += (_, cVar) => {
+            SetLocalisation(CultureInfo.GetCultureInfo(cVar.value));
+        };
     }
 
     /// <summary>
