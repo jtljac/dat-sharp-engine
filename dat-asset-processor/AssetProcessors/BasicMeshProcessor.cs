@@ -1,14 +1,10 @@
 using Assimp;
-using Assimp.Unmanaged;
-using dat_asset_processor.Util;
-using NLog;
+using dat_asset_handlers.DatMesh;
 
 namespace dat_asset_processor.AssetProcessors;
 
 public class BasicMeshProcessor : IBaseAssetProcessor {
-    private static readonly byte[] FileSignature = [0xB1, 0x44, 0x41, 0x54, 0x4D, 0x45, 0x53, 0x48];    // ±DATMESH
-    private const byte FileVersion = 0x01; // 1
-    private readonly AssimpContext _importer = new AssimpContext();
+    private readonly AssimpContext _importer = new();
 
     protected virtual byte vertexSize => 48;
 
@@ -39,8 +35,8 @@ public class BasicMeshProcessor : IBaseAssetProcessor {
     }
 
     protected void WriteHeader(BinaryWriter writer) {
-        writer.Write(FileSignature);    // Signature
-        writer.Write(FileVersion);  // Version
+        writer.Write(DatMeshConstants.FileSignature);    // Signature
+        writer.Write(DatMeshConstants.FileVersion);  // Version
         writer.Write(vertexSize);   // Vertex Size
 
         // Vertex, Index, and TypeHint count can be written when we know their size
@@ -50,16 +46,17 @@ public class BasicMeshProcessor : IBaseAssetProcessor {
     }
 
     protected virtual void WriteTypeHints(BinaryWriter writer) {
+        // Set count in header
         var curPos = writer.BaseStream.Position;
-        writer.Seek(19, SeekOrigin.Begin);
-        writer.Write((byte) 4);
+        writer.Seek(18, SeekOrigin.Begin);
+        writer.Write((byte) 5);
         writer.Seek((int) curPos, SeekOrigin.Begin);
 
-        writer.Write((byte) TypeHint.R32G32B32SFloat);      // Position
-        writer.Write((byte) TypeHint.R32SFloat);            // UV.x
-        writer.Write((byte) TypeHint.R32G32B32SFloat);      // Normal
-        writer.Write((byte) TypeHint.R32SFloat);            // UV.y
-        writer.Write((byte) TypeHint.R32G32B32A32SFloat);   // Colour
+        writer.Write((byte) DatMeshTypeHint.R32G32B32SFloat);      // Position
+        writer.Write((byte) DatMeshTypeHint.R32SFloat);            // UV.x
+        writer.Write((byte) DatMeshTypeHint.R32G32B32SFloat);      // Normal
+        writer.Write((byte) DatMeshTypeHint.R32SFloat);            // UV.y
+        writer.Write((byte) DatMeshTypeHint.R32G32B32A32SFloat);   // Colour
     }
 
     protected virtual void WriteVertices(Mesh mesh, BinaryWriter writer) {

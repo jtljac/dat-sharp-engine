@@ -1,5 +1,5 @@
-namespace dat_asset_processor.Util {
-    public enum TypeHint : byte {
+namespace dat_asset_handlers.DatMesh {
+    public enum DatMeshTypeHint : byte {
         R8UInt = 0, //0b00000000
         R8SInt = 1, //0b00000001
         R8UNorm = 3, //0b00000011
@@ -80,19 +80,19 @@ namespace dat_asset_processor.Util {
 }
 
 namespace EnumExtensions {
-    using dat_asset_processor.Util;
+    using dat_asset_handlers.DatMesh;
 
     public static class TypeHintExtensions {
-        public static TypeHint GetPrimitiveTypeHint(this TypeHint typeHint) {
-            return (TypeHint) ((byte) typeHint & 0b00001111);
+        public static DatMeshTypeHint GetPrimitiveTypeHint(this DatMeshTypeHint datMeshTypeHint) {
+            return (DatMeshTypeHint) ((byte) datMeshTypeHint & 0b00001111);
         }
 
-        public static int GetPrimitiveSize(this TypeHint typeHint) {
-            return 1 << ((byte) typeHint & 0b11000000 >> 6);
+        public static int GetPrimitiveSize(this DatMeshTypeHint datMeshTypeHint) {
+            return 1 << ((byte) datMeshTypeHint & 0b11000000 >> 6);
         }
 
-        public static int GetComponentCount(this TypeHint typeHint) {
-            return ((byte) typeHint & 0b00110000 >> 4) + 1;
+        public static int GetComponentCount(this DatMeshTypeHint datMeshTypeHint) {
+            return ((byte) datMeshTypeHint & 0b00110000 >> 4) + 1;
         }
     }
 }

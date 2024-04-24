@@ -20,4 +20,12 @@
       </None>
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Util\" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\dat-asset-handlers\dat-asset-handlers.csproj" />
+    </ItemGroup>
+
 </Project>
