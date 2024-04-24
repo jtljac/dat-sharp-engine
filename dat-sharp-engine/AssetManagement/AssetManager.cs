@@ -31,11 +31,20 @@ public class AssetManager {
     }
 
     /// <summary>
-    ///    Get an asset from the asset manager
+    /// Check if a file exists in the VFS
+    /// </summary>
+    /// <param name="path">The path to the file in the VFS</param>
+    /// <returns>True if the file exists</returns>
+    public bool GetFileExists(string path) {
+        return _vfs.FileExists(path);
+    }
+
+    /// <summary>
+    /// Get an asset from the asset manager
     /// </summary>
     /// <param name="path">The path to the asset in the VFS</param>
     /// <param name="lazyLoad">
-    ///     If true, the asset should wait till it is used before fetching it's file reference
+    ///     If true, the asset should wait till it is first used before fetching it's file reference
     ///     <para/>
     ///     This would be used if the file at the <paramref name="path"/> would not have been mounted yet at the creation
     ///     time of this asset
@@ -45,7 +54,7 @@ public class AssetManager {
     /// <exception cref="FileNotFoundException">
     ///     Thrown if lazy load is false and <paramref name="path"/> doesn't point to a file.
     /// </exception>
-    public T GetAsset<T>(string path, bool lazyLoad = false) where T : Asset, new() {
+    public T GetAsset<T>(string path, AssetLoadMode loadMode = AssetLoadMode.None) where T : Asset {
         var assetCacheKey = new AssetCacheKey(path, typeof(T));
 
         // Check cache for asset
@@ -54,18 +63,18 @@ public class AssetManager {
             return (T) cachedAsset;
 
         // Create new asset
-        T asset;
-        if (!lazyLoad) {
-            var file = _vfs.GetFile(path);
-            if (file == null) throw new FileNotFoundException($"Failed to find file at: {path}");
-
-            asset = (T) Activator.CreateInstance(typeof(T), path, file)!;
-        } else {
-            asset = (T) Activator.CreateInstance(typeof(T), path, null)!;
+        DVfsFile? file = null;
+        if (loadMode != AssetLoadMode.Lazy) {
+             file = _vfs.GetFile(path);
+            if (file == null)
+                throw new FileNotFoundException($"Failed to find file at: {path}");
         }
 
         // Hack to call constructor with arguments
+        var asset = (T) Activator.CreateInstance(typeof(T), path, file)!;
         _assetCache[assetCacheKey] = new WeakReference<Asset>(asset);
+
+        if (loadMode == AssetLoadMode.Eager) asset.AcquireCpuAsset();
 
         return asset;
     }
@@ -93,3 +102,22 @@ public class AssetManager {
 /// <param name="path">A path to an Asset</param>
 /// <param name="type">An asset type</param>
 internal record AssetCacheKey(string path, Type type);
+
+public enum AssetLoadMode : byte {
+    /// <summary>Simply fetch the asset without loading</summary>
+    None,
+    /// <summary>
+    /// Fetch the asset without loading, but don't verify if the file exists in the VFS
+    /// <para/>
+    /// This would be used if the file at the path will not have been mounted yet at the creation time of the asset
+    /// </summary>
+    Lazy,
+    /// <summary>
+    /// Fetch the asset and kick of loading the contents of the asset
+    /// <para/>
+    /// This will perform <see cref="Asset.AcquireCpuAsset"/> for you.
+    /// <para/>
+    /// The asset is <b>not</b> guaranteed to be loaded before this function returns
+    /// </summary>
+    Eager
+}

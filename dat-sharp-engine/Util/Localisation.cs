@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using dat_sharp_engine.AssetManagement;
+using dat_sharp_vfs;
+using LanguageExtensions;
 using SmartFormat;
+using Tomlyn;
 
 namespace dat_sharp_engine.Util;
 
@@ -17,8 +21,13 @@ public static class Localisation {
     /// <summary>A dictionary of string translations</summary>
     private static readonly Dictionary<string, string> Strings = new();
 
+    public static event UpdateLocaleStrings? LocaleStringsUpdateEvent;
+
     static Localisation() {}
 
+    /// <summary>
+    /// Initialise the Localisation Subsystem
+    /// </summary>
     public static void Initialise() {
         SetLocalisation(CultureInfo.GetCultureInfo(EngineCVars.LocaleCVar.value));
         EngineCVars.LocaleCVar.OnChangeEvent += (_, cVar) => {
@@ -32,8 +41,38 @@ public static class Localisation {
     /// <param name="culture">The new culture</param>
     private static void SetLocalisation(CultureInfo culture) {
         localeCulture = culture;
+
         // Load
+        Strings.Clear();
+
+        var localeName = $"{culture.Name}.lang";
+
+        // Get the locales to add
+        // Note US Locale is always applied first
+        var isUs = culture.Name != "en-US";
+        List<string> locales = ["engine/locales/en-US.lang"];
+        if (isUs) locales.Add($"engine/locales/{localeName}");
+        locales.Add("locales/en-US.lang");
+        if (isUs) locales.Add($"locales/{localeName}");
+
+        var localeAssets = locales
+            .Where(path => AssetManager.instance.GetFileExists(path))
+            .Select(path => AssetManager.instance.GetAsset<LocaleAsset>(path, AssetLoadMode.Eager))
+            .ToArray();
+
+        // Load all locales
+        foreach (var localeAsset in localeAssets) {
+            localeAsset.WaitForCpuLoad();
+        }
+
+        // Apply all locales in order
+        foreach (var localeAsset in localeAssets) {
+            Strings.AddRange(localeAsset.localeMap!, true);
+        }
+
+        LocaleStringsUpdateEvent?.Invoke(Strings, culture);
     }
+
 
     /// <summary>
     /// Localise the given string into the currently configured locale.
@@ -80,5 +119,38 @@ public static class Localisation {
     /// <returns>The localised and formatted string</returns>
     public static string Formattable(FormattableString formattable) {
         return Smart.Format(localeCulture, formattable.Format.Localise(), formattable.GetArguments());
+    }
+
+    public delegate void UpdateLocaleStrings(in Dictionary<string, string> strings, CultureInfo newCulture);
+}
+
+/// <summary>
+/// An asset representing a locale mapping of strings to localised strings
+/// </summary>
+public class LocaleAsset : Asset {
+    /// <summary>The mapping of strings to localised strings</summary>
+    public Dictionary<string, string>? localeMap;
+
+    /// <summary>
+    /// Create a virtual LocaleAsset
+    /// </summary>
+    /// <param name="localeMap">The map of strings to localised strings</param>
+    public LocaleAsset(Dictionary<string, string> localeMap) {
+        this.localeMap = localeMap;
+    }
+    public LocaleAsset(string? path, DVfsFile? file) : base(path, file) { }
+
+    protected override void CpuLoadAssetImpl(Stream assetData) {
+        using TextReader reader = new StreamReader(assetData);
+
+        var lang = Toml.ToModel(reader.ReadToEnd());
+        localeMap = new Dictionary<string, string>(lang.Count);
+        foreach (var (key, value) in lang) {
+            localeMap.Add(key, (string) value);
+        }
+    }
+
+    protected override void CpuUnloadAssetImpl() {
+        localeMap = null;
     }
 }
