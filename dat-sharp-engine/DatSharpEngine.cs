@@ -17,9 +17,10 @@ public class DatSharpEngine {
     /// <summary>The static instance of the engine</summary>
     public static DatSharpEngine instance { get; } = new();
     /// <summary>The instance of the renderer being used by the engine</summary>
-    public DatRenderer? renderer { get; private set; }
+    public DatRenderer renderer { get; private set; } = null!;
+
     /// <summary>The application settings defining game to the engine</summary>
-    public ApplicationSettings? appSettings { get; private set; }
+    public ApplicationSettings appSettings { get; private set; } = null!;
     
     /// <summary>The window the game is in</summary>
     public unsafe Window* window;
@@ -65,7 +66,7 @@ public class DatSharpEngine {
             throw new SdlException("Failed to initialise SDL");
         }
 
-        var windowFlags = renderer!.GetWindowFlags();
+        var windowFlags = renderer.GetWindowFlags();
         if (EngineCVars.ResizableCvar.value) windowFlags |= (uint) WindowFlags.Resizable;
         switch (EngineCVars.WindowModeCvar.value) {
             case 1:
@@ -76,7 +77,7 @@ public class DatSharpEngine {
                 break;
         }
 
-        window = sdl.CreateWindow(appSettings!.name,
+        window = sdl.CreateWindow(appSettings.name,
             Sdl.WindowposUndefined,
             Sdl.WindowposUndefined,
             EngineCVars.WindowWidthCvar.value,
@@ -105,14 +106,14 @@ public class DatSharpEngine {
             
             // SDL.SDL.SDL_PollEvent()
             
-            renderer!.Draw(deltaTime, currentTime);
+            renderer.Draw(deltaTime, currentTime);
             
             lastTime = currentTime;
         }
         
         Logger.EngineLogger.Info("Cleaning up");
         
-        renderer!.Cleanup();
+        renderer.Cleanup();
 
         unsafe {
             sdl.DestroyWindow(window);
@@ -123,7 +124,7 @@ public class DatSharpEngine {
     }
 
     /// <summary>
-    /// Tell the engine to shutdown gracefully
+    /// Tell the engine to shut down gracefully
     /// </summary>
     public void Exit() {
         shouldClose = true;

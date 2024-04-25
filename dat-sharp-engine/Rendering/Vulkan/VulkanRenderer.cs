@@ -4,8 +4,9 @@ using System.Collections.Immutable;
 
 using System.Numerics;
 using System.Runtime.InteropServices;
+using dat_sharp_engine.AssetManagement;
 using dat_sharp_engine.Collection;
-using dat_sharp_engine.Rendering.Object;
+using dat_sharp_engine.Mesh;
 using dat_sharp_engine.Rendering.Util;
 using dat_sharp_engine.Rendering.Vulkan.Descriptor;
 using dat_sharp_engine.Rendering.Vulkan.GpuStructures;
@@ -20,7 +21,6 @@ using VMASharp;
 using Buffer = System.Buffer;
 using Queue = Silk.NET.Vulkan.Queue;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
-using Vertex = dat_sharp_engine.Rendering.Object.Vertex;
 
 namespace dat_sharp_engine.Rendering.Vulkan;
 
@@ -96,13 +96,13 @@ public class VulkanRenderer : DatRenderer {
     private CommandBuffer _immTransferCommandBuffer;
 
     // Gpu Memory tracking
-    private IdTrackedResource<AllocatedBuffer> _bufferList = new();
-    private IdTrackedResource<AllocatedMesh> _meshList = new();
+    private readonly ConcurrentIdTrackedResource<AllocatedBuffer> _bufferList = new();
+    private readonly ConcurrentIdTrackedResource<AllocatedMesh?> _meshList = new();
 
     // Debug
     private ExtDebugUtils? _extDebugUtils;
     private DebugUtilsMessengerEXT _debugUtilsMessenger;
-    private AllocatedMesh _tempMesh;
+    private Mesh3d _tempMesh3d;
 
     public VulkanRenderer() {
         _sdl = DatSharpEngine.instance.sdl;
@@ -891,48 +891,8 @@ public class VulkanRenderer : DatRenderer {
     }
 
     private void InitialiseMesh() {
-        Vertex[] vertices = [
-            new Vertex(
-                new Vector3D<float>(0.5f, -0.5f, 0),
-                0,
-                new Vector3D<float>(),
-                0,
-                new Vector4D<float>(0, 0, 0, 1)
-            ),
-            new Vertex(
-                new Vector3D<float>(0.5f, 0.5f, 0),
-                0,
-                new Vector3D<float>(),
-                0,
-                new Vector4D<float>(0.5f, 0.5f, 0.5f , 1)
-            ),
-            new Vertex(
-                new Vector3D<float>(-0.5f, -0.5f, 0),
-                0,
-                new Vector3D<float>(),
-                0,
-                new Vector4D<float>(1, 0, 0, 1)
-            ),
-            new Vertex(
-                new Vector3D<float>(-0.5f, 0.5f, 0),
-                0,
-                new Vector3D<float>(),
-                0,
-                new Vector4D<float>(0, 1, 0, 1)
-            )
-        ];
-
-        uint[] indices = [
-            0,
-            1,
-            2,
-
-            2,
-            1,
-            3
-        ];
-
-        // _tempMesh = UploadMesh(new Mesh(vertices, indices));
+        _tempMesh3d = AssetManager.instance.GetAsset<Mesh3d>("Primitives/Plane.datmesh");
+        _tempMesh3d.AcquireGpuAsset();
     }
 
     /* --------------------------------------- */
@@ -1115,11 +1075,16 @@ public class VulkanRenderer : DatRenderer {
 
         _vk.CmdBindPipeline(currentFrameData.commandBuffer, PipelineBindPoint.Graphics, _trianglePipeline);
 
-        var pushConstants = new DrawPushConstants(Matrix4X4<float>.Identity, _tempMesh.vertexBufferAddress);
-        _vk.CmdPushConstants(currentFrameData.commandBuffer, _trianglePipelineLayout, ShaderStageFlags.VertexBit, 0, (uint) sizeof(DrawPushConstants), ref pushConstants);
-        _vk.CmdBindIndexBuffer(currentFrameData.commandBuffer, _tempMesh.indexBuffer.buffer, 0, IndexType.Uint32);
+        if (_tempMesh3d.isGpuLoaded) {
+            _meshList.Get(_tempMesh3d.gpuIndex, out var gpuMesh);
 
-        _vk.CmdDrawIndexed(currentFrameData.commandBuffer, 6, 1, 0, 0, 0);
+            var pushConstants = new DrawPushConstants(Matrix4X4<float>.Identity, gpuMesh!.vertexBufferAddress);
+            _vk.CmdPushConstants(currentFrameData.commandBuffer, _trianglePipelineLayout, ShaderStageFlags.VertexBit, 0, (uint) sizeof(DrawPushConstants), ref pushConstants);
+            _vk.CmdBindIndexBuffer(currentFrameData.commandBuffer, gpuMesh.indexBuffer.buffer, 0, IndexType.Uint32);
+
+            _vk.CmdDrawIndexed(currentFrameData.commandBuffer, 6, 1, 0, 0, 0);
+        }
+
 
         _vk.CmdEndRendering(currentFrameData.commandBuffer);
     }
@@ -1149,8 +1114,8 @@ public class VulkanRenderer : DatRenderer {
     /* Asset Handling                          */
     /* --------------------------------------- */
 
-    public override unsafe AllocatedMesh UploadMesh(Mesh mesh) {
-        var vertexSize = (ulong) (mesh.vertices!.Length);
+    public override unsafe ulong UploadMesh(Mesh3d mesh) {
+        var vertexSize = (ulong) mesh.vertices!.Length;
         var indexSize = (ulong) (mesh.indices!.Length * sizeof(uint));
 
         var vertexBuffer = CreateBuffer(vertexSize,
@@ -1207,8 +1172,14 @@ public class VulkanRenderer : DatRenderer {
 
         var newMesh = new AllocatedMesh(indexBuffer, vertexBuffer, vertexAddress);
 
-        mesh.gpuIndex = _meshList.Insert(newMesh);
-        return newMesh;
+        return _meshList.Insert(newMesh);
+    }
+
+    public override void DestroyMesh(ulong meshId) {
+        if (!_meshList.Get(meshId, out var allocatedMesh)) return;
+
+        DestroyBuffer(allocatedMesh.indexBuffer);
+        DestroyBuffer(allocatedMesh.vertexBuffer);
     }
 
     /* --------------------------------------- */

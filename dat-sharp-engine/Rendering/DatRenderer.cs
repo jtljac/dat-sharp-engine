@@ -1,4 +1,4 @@
-using dat_sharp_engine.Rendering.Object;
+using dat_sharp_engine.Mesh;
 using dat_sharp_engine.Rendering.Vulkan.GpuStructures;
 using dat_sharp_engine.Util;
 
@@ -33,8 +33,14 @@ public abstract class DatRenderer {
     /// <param name="gameTime">The total running time of the game</param>
     public abstract void Draw(float deltaTime, float gameTime);
 
-    public abstract AllocatedMesh UploadMesh(Mesh mesh);
-    
+    public abstract ulong UploadMesh(Mesh3d mesh);
+
+    public abstract void DestroyMesh(ulong meshId);
+
+    public void UnloadMesh(Mesh3d mesh) {
+        if (mesh.isGpuLoaded) DestroyMesh(mesh.gpuIndex);
+    }
+
     /// <summary>
     /// Cleanup the renderer
     /// </summary>

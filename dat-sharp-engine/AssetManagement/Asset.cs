@@ -29,7 +29,7 @@ public abstract class Asset {
     /// If this week reference is invalid, then the file is assumed to have been reloaded, and will be re-fetched by the
     /// path. This functionality is not supported if the file has more than one reference.
     /// </summary>
-    protected WeakReference<DVfsFile>? _file;
+    protected WeakReference<DVfsFile>? file;
 
     /// <summary>
     /// If <c>true</c>, this asset is unique and not backed by a file on the disk and therefore has no loading or
@@ -59,16 +59,24 @@ public abstract class Asset {
     private SpinLock _cpuLoadLock;
 
     /// <summary>
-    /// A count of the usages of this asset on the CPU
+    /// A count of the usages of this asset on the Cpu
     /// </summary>
-    private int _cpuUsages = 0;
+    private int _cpuUsages;
+
+    /// <summary>The load state of the asset</summary>
+    public AssetLoadState CpuLoadState => _cpuLoadState;
+
+    /// <summary>If <c>true</c>, then the file is currently loaded in Cpu memory</summary>
+    public bool isCpuLoaded => _cpuLoadState == AssetLoadState.Loaded;
+    /// <summary>If <c>true</c>, then the file is currently loading into Cpu memory</summary>
+    public bool isCpuLoading => _cpuLoadState == AssetLoadState.Loading;
 
     /// <summary>
     /// Base initialiser for a virtual asset
     /// </summary>
     protected Asset() {
         path = null;
-        _file = null;
+        file = null;
         _cpuLoadState = AssetLoadState.Loaded;
     }
 
@@ -83,25 +91,17 @@ public abstract class Asset {
 
         // File can be lazily acquired
         if (file == null) {
-            _file = null;
+            this.file = null;
             return;
         }
 
-        _file = new WeakReference<DVfsFile>(file);
+        this.file = new WeakReference<DVfsFile>(file);
 
         if (file.references > 1) Logger.EngineLogger.Warn(
             "Asset at {} is stored in the VFS multiple times, this asset may not detect when it's file has been replaced in the VFS",
             path
         );
     }
-
-    /// <summary>The load state of the asset</summary>
-    public AssetLoadState CpuLoadState => _cpuLoadState;
-
-    /// <summary>If <c>true</c>, then the file is currently loaded in Cpu memory</summary>
-    public bool isCpuLoaded => _cpuLoadState == AssetLoadState.Loaded;
-    /// <summary>If <c>true</c>, then the file is currently loading into Cpu memory</summary>
-    public bool isCpuLoading => _cpuLoadState == AssetLoadState.Loading;
 
     ~Asset() {
         // Clean up in case this asset does funky stuff
@@ -118,10 +118,13 @@ public abstract class Asset {
     /// once you are done using this asset, as this being incorrectly tracked can lead to early unloading, or the asset
     /// becoming stuck loaded and leaked
     /// </summary>
+    /// <returns>A task representing the Cpu load job</returns>
     /// <seealso cref="ReleaseCpuAsset"/>
-    public void AcquireCpuAsset() {
+    public Task AcquireCpuAsset() {
         Interlocked.Increment(ref _cpuUsages);
-        if (!isCpuLoaded && !isCpuLoading) RequestCpuLoadAsset();
+        if (!isCpuLoaded && !isCpuLoading) return RequestCpuLoadAsset();
+
+        return _cpuLoadTask ?? ThreadManager.instance.completedTask;
     }
 
     /// <summary>
@@ -154,12 +157,12 @@ public abstract class Asset {
     /// <para/>
     /// This cannot be interrupted, and will lock <see cref="_cpuLoadLock"/>
     /// </summary>
-    /// <exception cref="DatAssetException">Thrown when failing to acquire the raw asset from the <see cref="AssetManager"/></exception>
+    /// <exception cref="FileNotFoundException">Thrown when failing to acquire the raw asset from the <see cref="AssetManager"/></exception>
     private void CpuLoadJob() {
-        var file = GetRawFile();
-        if (file == null) throw new DatAssetException($"Failed to get asset file: {path}");
+        var rawFile = GetRawFile();
+        if (rawFile == null) throw new FileNotFoundException($"Failed to get asset file: {path}");
 
-        CpuLoadAssetImpl(file.GetFileStream());
+        CpuLoadAssetImpl(rawFile.GetFileStream());
 
         var lockTaken = false;
         try {
@@ -202,7 +205,7 @@ public abstract class Asset {
     protected Task RequestCpuLoadAsset() {
         if (isVirtual) return ThreadManager.instance.completedTask;
 
-        // Lock as we are modifying _loadState and do not want multiple threads to enter this part of the function at
+        // Lock as we are modifying _cpuLoadState and do not want multiple threads to enter this part of the function at
         // the same time
         var lockTaken = false;
         try {
@@ -237,7 +240,7 @@ public abstract class Asset {
     /// This always happens asyncronously.
     /// </summary>
     /// <returns>A task representing the asynchronous Cpu unload</returns>
-    protected Task CpuUnloadAsset() {
+    protected Task? CpuUnloadAsset() {
         if (isVirtual) return ThreadManager.instance.completedTask;
 
         var lockTaken = false;
@@ -247,19 +250,13 @@ public abstract class Asset {
                 case AssetLoadState.Unloaded:
                     return ThreadManager.instance.completedTask;
                 case AssetLoadState.Loading:
-                    _cpuLoadState = AssetLoadState.Loading;
-                    _cpuLoadTask = _cpuLoadTask!.ContinueWith(_ => {
-                        CpuUnloadJob();
-                    }, TaskContinuationOptions.LongRunning);
-                    return _cpuLoadTask;
+                    return null;
                 case AssetLoadState.Loaded:
-                    return ThreadManager.instance.completedTask;
-                case AssetLoadState.Unloading:
-                    _cpuLoadState = AssetLoadState.Loading;
-                    _cpuLoadTask = _cpuLoadTask!.ContinueWith(_ => {
-                        CpuLoadJob();
-                    }, TaskContinuationOptions.LongRunning);
+                    _cpuLoadState = AssetLoadState.Unloading;
+                    _cpuLoadTask = ThreadManager.instance.StartLongTask(CpuUnloadJob);
                     return _cpuLoadTask;
+                case AssetLoadState.Unloading:
+                    return _cpuLoadTask!;
                 default:
                     throw new ArgumentOutOfRangeException();
             }
@@ -276,18 +273,19 @@ public abstract class Asset {
     protected DVfsFile? GetRawFile() {
         if (isVirtual) return null;
 
-        if (_file != null && _file.TryGetTarget(out var file)) return file;
+        if (file != null && file.TryGetTarget(out var rawFile)) return rawFile;
 
-        file = AssetManager.instance.GetRawAssetFile(path!);
-        _file = new WeakReference<DVfsFile>(file);
+        rawFile = AssetManager.instance.GetRawAssetFile(path!);
+        file = new WeakReference<DVfsFile>(rawFile);
 
-        return file;
+        return rawFile;
     }
 
     /// <summary>
     /// The implementation to load the asset from a stream into Cpu memory
     /// </summary>
-    /// <param name="assetData"></param>
+    /// <param name="assetData">A stream containing the contents of the asset file</param>
+    /// <exception cref="DatAssetException">Thrown when an error occurs whilst loading the asset</exception>
     protected abstract void CpuLoadAssetImpl(Stream assetData);
 
     /// <summary>
