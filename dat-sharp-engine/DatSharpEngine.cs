@@ -31,7 +31,7 @@ public class DatSharpEngine {
     static DatSharpEngine() { }
 
     /// <summary>
-    /// Setup the engine and the engine subsystems
+    /// Set up the engine and the engine subsystems
     /// <list type="bullet">
     ///     <item>CVars</item>
     ///     <item>Renderer</item>

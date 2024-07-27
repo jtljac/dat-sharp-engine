@@ -43,7 +43,7 @@ public class Mesh3d : GpuAsset {
 
         indices = new uint[indexCount];
         var bytes = MemoryMarshal.AsBytes(indices.AsSpan());
-        var readIndices = reader.Read(bytes);
+        var readIndices = reader.Read(bytes) / sizeof(uint);
         if (readIndices != indexCount) throw new DatAssetException("Asset stream contained less data than expected");
     }
 

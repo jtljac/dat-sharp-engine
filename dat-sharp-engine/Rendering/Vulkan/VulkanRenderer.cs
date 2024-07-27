@@ -164,7 +164,6 @@ public class VulkanRenderer : DatRenderer {
         var applicationName = SilkMarshal.StringToPtr(DatSharpEngine.instance.appSettings.name);
 
         ApplicationInfo appInfo = new() {
-            SType = StructureType.ApplicationInfo,
             ApiVersion = Vk.Version13,
             EngineVersion = Vk.MakeVersion(EngineConstants.EngineVersion.Major,
                 EngineConstants.EngineVersion.Minor,
@@ -184,7 +183,6 @@ public class VulkanRenderer : DatRenderer {
         var enabledExtensions = SilkMarshal.StringArrayToPtr(extensions.ToArray());
 
         InstanceCreateInfo instanceInfo = new() {
-            SType = StructureType.InstanceCreateInfo,
             Flags = InstanceCreateFlags.None,
             EnabledLayerCount = (uint) layers.Count,
             PpEnabledLayerNames = (byte**) enabledLayers,
@@ -197,7 +195,6 @@ public class VulkanRenderer : DatRenderer {
 #if DEBUG
         // We gotta dance this around so it may be included in the instance info and createDebug
         DebugUtilsMessengerCreateInfoEXT debugInfo = new() {
-            SType = StructureType.DebugUtilsMessengerCreateInfoExt,
             MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt |
                               DebugUtilsMessageSeverityFlagsEXT.WarningBitExt,
             MessageType = DebugUtilsMessageTypeFlagsEXT.ValidationBitExt |
@@ -218,7 +215,7 @@ public class VulkanRenderer : DatRenderer {
         SilkMarshal.Free(applicationName);
 
         if (result != Result.Success) {
-            throw new DatRendererException("Failed to initialise vulkan");
+            throw new DatRendererException($"Failed to initialise vulkan: {result.ToString()}");
         }
 
         // Setup debug stuff
@@ -260,7 +257,7 @@ public class VulkanRenderer : DatRenderer {
         var layers = new HashSet<string> {
             "VK_LAYER_KHRONOS_validation",
             "VK_LAYER_LUNARG_monitor",
-            "VK_LAYER_MANGOAPP_overlay"
+            // "VK_LAYER_MANGOAPP_overlay"
         };
 
         if (!CheckValidationLayerSupport(layers)) {
@@ -280,13 +277,10 @@ public class VulkanRenderer : DatRenderer {
         // TODO: Better selection method
         var devices = _vk.GetPhysicalDevices(_instance);
         foreach (var gpu in devices) {
-            var deviceIdProperties = new PhysicalDeviceIDProperties {
-                SType = StructureType.PhysicalDeviceIDProperties
-            };
-            var deviceProperties2 = new PhysicalDeviceProperties2 {
-                SType = StructureType.PhysicalDeviceProperties2,
-                PNext = &deviceIdProperties,
-            };
+            PhysicalDeviceProperties2
+                .Chain(out var deviceProperties2)
+                .AddNext(out PhysicalDeviceIDProperties deviceIdProperties);
+
             _vk.GetPhysicalDeviceProperties2(gpu, &deviceProperties2);
 
             var properties = deviceProperties2.Properties;
@@ -400,7 +394,7 @@ public class VulkanRenderer : DatRenderer {
             };
 
             // Device features that require setup via PNext
-            // (This would have been in it's own function but memory management needs to be handled in silly ways for garbage
+            // (This would have been in its own function but memory management needs to be handled in silly ways for garbage
             // collection reasons)
             var drawParametersFeatures = new PhysicalDeviceShaderDrawParametersFeatures {
                 SType = StructureType.PhysicalDeviceShaderDrawParametersFeatures,
@@ -421,8 +415,7 @@ public class VulkanRenderer : DatRenderer {
             };
 
             fixed (DeviceQueueCreateInfo* queues = queueInfos) {
-                DeviceCreateInfo deviceInfo = new() {
-                    SType = StructureType.DeviceCreateInfo,
+                var deviceInfo = new DeviceCreateInfo {
                     EnabledLayerCount = 0,
                     PpEnabledLayerNames = null,
                     EnabledExtensionCount = (uint) deviceExtensions.Count,
@@ -430,8 +423,12 @@ public class VulkanRenderer : DatRenderer {
                     QueueCreateInfoCount = (uint) queueInfos.Length,
                     PQueueCreateInfos = queues,
                     PEnabledFeatures = &features,
-                    PNext = &vulkan13Features
                 };
+
+                deviceInfo
+                    .SetNext(ref vulkan13Features)
+                    .SetNext(ref vulkan12Features)
+                    .SetNext(ref drawParametersFeatures);
 
                 if (_vk.CreateDevice(_physicalDevice, deviceInfo, null, out _device) != Result.Success) {
                     throw new DatRendererException("Failed to create device");
@@ -522,7 +519,6 @@ public class VulkanRenderer : DatRenderer {
         );
 
         SwapchainCreateInfoKHR swapchainInfo = new() {
-            SType = StructureType.SwapchainCreateInfoKhr,
             Surface = _surface,
             Clipped = true,
             CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
@@ -608,7 +604,6 @@ public class VulkanRenderer : DatRenderer {
     /// </exception>
     private unsafe void InitialiseFrameCommands(FrameData frameData) {
         CommandPoolCreateInfo commandPoolInfo = new() {
-            SType = StructureType.CommandPoolCreateInfo,
             Flags = CommandPoolCreateFlags.ResetCommandBufferBit,
             QueueFamilyIndex = _graphicsQueueIndex
         };
@@ -679,7 +674,6 @@ public class VulkanRenderer : DatRenderer {
 
     private unsafe void InitialiseExtraCommands() {
         CommandPoolCreateInfo commandPoolInfo = new() {
-            SType = StructureType.CommandPoolCreateInfo,
             Flags = CommandPoolCreateFlags.ResetCommandBufferBit,
             QueueFamilyIndex = _graphicsQueueIndex
         };
@@ -738,8 +732,6 @@ public class VulkanRenderer : DatRenderer {
         };
 
         var drawImageWrite = new WriteDescriptorSet {
-            SType = StructureType.WriteDescriptorSet,
-
             DstBinding = 0,
             DstSet = _drawImageDescriptor,
             DescriptorCount = 1,
@@ -758,7 +750,6 @@ public class VulkanRenderer : DatRenderer {
     private unsafe void InitialiseBackgroundPipelines() {
         fixed (DescriptorSetLayout* setLayout = &_drawImageDescriptorLayout) {
             var computeLayout = new PipelineLayoutCreateInfo {
-                SType = StructureType.PipelineLayoutCreateInfo,
                 SetLayoutCount = 1,
                 PSetLayouts = setLayout,
             };
@@ -786,15 +777,12 @@ public class VulkanRenderer : DatRenderer {
         var pEntryPoint = Marshal.StringToHGlobalAnsi(entryPoint);
 
         var stageInfo = new PipelineShaderStageCreateInfo {
-            SType = StructureType.PipelineShaderStageCreateInfo,
             Stage = ShaderStageFlags.ComputeBit,
             Module = computeDrawShader,
             PName = (byte*) pEntryPoint
         };
 
         var computePipelineInfo = new ComputePipelineCreateInfo {
-            SType = StructureType.ComputePipelineCreateInfo,
-
             Layout = _gradientPipelineLayout,
             Stage = stageInfo
         };
@@ -819,7 +807,6 @@ public class VulkanRenderer : DatRenderer {
         );
 
         var pipelineLayout = new PipelineLayoutCreateInfo {
-            SType = StructureType.PipelineLayoutCreateInfo,
             SetLayoutCount = 0,
             PSetLayouts = null,
         };
@@ -862,7 +849,6 @@ public class VulkanRenderer : DatRenderer {
         };
 
         var pipelineLayout = new PipelineLayoutCreateInfo {
-            SType = StructureType.PipelineLayoutCreateInfo,
             SetLayoutCount = 0,
             PSetLayouts = null,
             PushConstantRangeCount = 1,
@@ -1009,7 +995,6 @@ public class VulkanRenderer : DatRenderer {
         fixed (Semaphore* waitSemaphore = &currentFrameData.renderSemaphore) {
             // Present
             var presentInfo = new PresentInfoKHR {
-                SType = StructureType.PresentInfoKhr,
                 SwapchainCount = 1,
                 PSwapchains = swapchain,
 
@@ -1125,7 +1110,7 @@ public class VulkanRenderer : DatRenderer {
         );
 
         var vertexAddress = _vk.GetBufferDeviceAddress(_device,
-            new BufferDeviceAddressInfo { SType = StructureType.BufferDeviceAddressInfo, Buffer = vertexBuffer.buffer }
+            new BufferDeviceAddressInfo { Buffer = vertexBuffer.buffer }
         );
 
         var indexBuffer = CreateBuffer(indexSize,
@@ -1196,7 +1181,6 @@ public class VulkanRenderer : DatRenderer {
     /// <returns>An allocated buffer</returns>
     public AllocatedBuffer CreateBuffer(ulong allocSize, BufferUsageFlags usage, MemoryUsage memoryUsage, AllocationCreateFlags flags = AllocationCreateFlags.Mapped) {
         var bufferInfo = new BufferCreateInfo {
-            SType = StructureType.BufferCreateInfo,
             Size = allocSize,
             Usage = usage,
             SharingMode = SharingMode.Exclusive
