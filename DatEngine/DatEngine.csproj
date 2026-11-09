@@ -1,0 +1,34 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <RootNamespace>DatEngine</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Ahwoo.BRUTAL.Concurrency" Version="2026.10.2" />
+      <PackageReference Include="Ahwoo.BRUTAL.Maths" Version="2026.10.3" />
+      <PackageReference Include="Ahwoo.BRUTAL.Numerics" Version="2026.10.2" />
+      <PackageReference Include="Ahwoo.BRUTAL.Sdl" Version="2026.10.3" />
+      <PackageReference Include="Ahwoo.BRUTAL.Slang" Version="2026.10.3" />
+      <PackageReference Include="Ahwoo.BRUTAL.Vulkan" Version="2026.10.3" />
+      <PackageReference Include="Ahwoo.BRUTAL.Vulkan.Abstractions" Version="2026.10.3" />
+      <PackageReference Include="Ahwoo.BRUTAL.Vulkan.Vma" Version="2026.10.3" />
+      <PackageReference Include="NLog" Version="6.2.2" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="nlog.config" />
+      <Content Include="nlog.config">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\DatGenerator\DatGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    </ItemGroup>
+
+</Project>

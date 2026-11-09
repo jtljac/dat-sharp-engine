@@ -1,0 +1,400 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Brutal;
+using Brutal.SdlApi;
+using Brutal.Strings;
+using Brutal.VulkanApi;
+using Brutal.VulkanApi.Abstractions;
+using Brutal.VulkanApi.Vma;
+using DatEngine.Util;
+
+namespace DatEngine.Gpu.Vulkan;
+
+public class VulkanGpu : IGpu {
+    [CVar("Test")]
+    public static CVar<int> test = new(5);
+
+    // Vulkan Instance Objects
+    /// <summary>
+    /// The instance of vulkan used for interacting with Vulkan
+    /// </summary>
+    protected Instance instance = null!;
+    /// <summary>
+    /// Handle for the debug messenger
+    /// </summary>
+    protected VkDebugUtilsMessengerEXT debugMessenger;
+    /// <summary>
+    /// The physical GPU that this vulkan instance will use
+    /// </summary>
+    protected PhysicalDevice physicalDevice = null!;
+    /// <summary>
+    /// The logical representation of the device for accessing and creating resources
+    /// </summary>
+    protected Device device = null!;
+
+    /// <summary>
+    /// The handle for creating and managing Memory on the GPU
+    /// </summary>
+    protected VmaAllocator allocator = null!;
+
+    // Queues
+    /// <summary>
+    /// The queue to use for graphics commands
+    /// </summary>
+    /// <remarks>
+    /// If the <see cref="transferQueue"/> or <see cref="computeQueue"/> do not have a dedicated queue, they will return
+    /// this graphics queue
+    /// </remarks>
+    protected VulkanQueue graphicsQueue;
+
+    /// <value>
+    /// True when there isn't an independent transfer queue, so transfer operations have to go through
+    /// the <see cref="graphicsQueue"/>
+    /// </value>
+    protected bool unifiedTransferQueue;
+
+    /// <summary>
+    /// The queue to use for transfers between the CPU and GPU memory
+    /// </summary>
+    protected VulkanQueue? transferQueue {
+        get => unifiedTransferQueue ? graphicsQueue : field;
+        set;
+    }
+
+    /// <value>
+    /// True when there isn't an independent compute queue, so compute operations have to go through
+    /// the <see cref="graphicsQueue"/>
+    /// </value>
+    protected bool unifiedComputeQueue;
+
+    /// <summary>
+    /// The queue to use for async compute operations
+    /// </summary>
+    protected VulkanQueue? computeQueue {
+        get => unifiedComputeQueue ? graphicsQueue : field;
+        set;
+    }
+
+    // Windows
+    /// <summary>
+    /// The windows that vulkan is set up to render to
+    /// </summary>
+    protected List<VulkanWindow> windows = [];
+
+    /// <summary>
+    /// The main window
+    /// </summary>
+    protected VulkanWindow? primaryWindow => windows.Count > 0 ? windows[0] : null;
+
+    /* --------------------------------------- */
+    /* Initialisation                          */
+    /* --------------------------------------- */
+
+    /**
+     * <summary>
+     * Initialise the Vulkan GPU Handler, and all it's required components
+     * </summary>
+     */
+    public void Init(SdlWindow primaryWindow) {
+        Logger.EngineLogger.Trace("Initializing Vulkan");
+
+        instance = InitialiseInstance();
+#if DEBUG
+        debugMessenger = InitialiseDebugMessenger();
+#endif
+        physicalDevice = InitialisePhysicalDevice();
+        InitialiseLogicalDevice();
+        allocator = InitialiseVma();
+    }
+
+    /**
+     * <summary>
+     * Set up the vulkan driver and retrieve the instance
+     * </summary>
+     * <returns>A new Vulkan Instance</returns>
+     */
+    private unsafe Instance InitialiseInstance() {
+        Logger.EngineLogger.Trace("Initialising Vulkan instance");
+
+        // Collect Extensions
+        var instanceExtensions = new HashSet<string>();
+        var validationLayers = new HashSet<string>();
+
+        VulkanHelpers.AddPlatformRequiredExtensions(instanceExtensions);
+
+        foreach (var instanceExtension in Sdl.Vulkan.GetInstanceExtensions()) {
+            instanceExtensions.Add(instanceExtension);
+        }
+
+#if DEBUG
+        // In debug mode, we want to load the validation layers
+        VulkanHelpers.AddDebugExtensions(instanceExtensions);
+        VulkanHelpers.AddValidationLayers(validationLayers);
+
+        Logger.EngineLogger.Debug("Loaded Validation Layers:");
+        foreach (var layer in validationLayers) {
+            Logger.EngineLogger.Debug("\t{}", layer);
+        }
+#endif
+
+        Logger.EngineLogger.Debug("Loaded Instance Extensions:");
+        foreach (var instanceExtension in instanceExtensions) {
+            Logger.EngineLogger.Debug("\t{}", instanceExtension);
+        }
+        fixed (byte* pAppName = new String8("Test App"))
+        fixed (byte* pEngineName = new String8("Dat Brutal Engine")) {
+            return Brutal.VulkanApi.Vulkan.CreateInstance(new Instance.CreateInfo {
+                    AppInfo = new VkApplicationInfo {
+                        ApplicationName = pAppName,
+                        EngineName = pEngineName,
+                        ApplicationVersion = Brutal.VulkanApi.Vulkan.MakeApiVersion(0, 1, 0, 0),
+                        EngineVersion = Brutal.VulkanApi.Vulkan.MakeApiVersion(0, 1, 0, 0),
+                        ApiVersion = (int) VulkanHelpers.Api.VERSION_1_3,
+                    },
+                    Flags = VulkanHelpers.GetPlatformRequiredInstanceCreateFlags(),
+                    EnabledExtensions = instanceExtensions,
+                    EnabledLayers = validationLayers
+                }
+            );
+        }
+    }
+
+    /// <summary>
+    /// Register the debug message handler
+    /// </summary>
+    /// <returns>A new Debug messenger Instance</returns>
+    private VkDebugUtilsMessengerEXT InitialiseDebugMessenger() {
+        Logger.EngineLogger.Trace("Initialising Vulkan Debug Messenger");
+
+        unsafe {
+            return instance.CreateDebugUtilsMessengerEXT(new VkDebugUtilsMessengerCreateInfoEXT {
+                    MessageSeverity = VkDebugUtilsMessageSeverityFlagsEXT.ErrorBitEXT |
+                                      VkDebugUtilsMessageSeverityFlagsEXT.WarningBitEXT,
+                    MessageType = VkDebugUtilsMessageTypeFlagsEXT.ValidationBitEXT |
+                                  VkDebugUtilsMessageTypeFlagsEXT.PerformanceBitEXT |
+                                  VkDebugUtilsMessageTypeFlagsEXT.DeviceAddressBindingBitEXT,
+                    PfnUserCallback = new PfnVkDebugUtilsMessengerCallbackEXT(&VulkanDebugCallback),
+                },
+                null
+            );
+        }
+    }
+
+    /// <summary>
+    /// Select a physical GPU from the system to use for Vulkan
+    /// </summary>
+    /// <returns>A physical device handle</returns>
+    private PhysicalDevice InitialisePhysicalDevice() {
+        Logger.EngineLogger.Trace("Initialising Vulkan Physical Device");
+
+        // TODO: Selection Process
+        return instance.PhysicalDevices[0];
+    }
+
+    /// <summary>
+    /// Select the queues and set up the logical device
+    /// </summary>
+    private unsafe void InitialiseLogicalDevice() {
+        Logger.EngineLogger.Trace("Initialising Vulkan Logical Device");
+
+        // Find all the queue families
+        var queueFamilies = new VkQueueFamilyProperties[physicalDevice.GetQueueFamilyProperties_Count()];
+        physicalDevice.GetQueueFamilyProperties_Write(queueFamilies.AsSpan());
+        var usedQueues = new int[queueFamilies.Length];
+
+        var graphicsQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.GraphicsBit, usedQueues);
+        usedQueues[graphicsQueueIndex]++;
+
+        var computeQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.ComputeBit, usedQueues);
+        if (computeQueueIndex != -1) usedQueues[computeQueueIndex]++;
+        else unifiedComputeQueue = true;
+
+        var transferQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.TransferBit, usedQueues);
+        if (transferQueueIndex != -1) usedQueues[transferQueueIndex]++;
+        else unifiedTransferQueue = true;
+
+
+
+        // Extensions
+        var deviceExtensions = new HashSet<string>();
+        VulkanHelpers.AddSwapchainExtensions(deviceExtensions);
+        VulkanHelpers.AddMandatoryIfSupportedDeviceExtensions(deviceExtensions, physicalDevice);
+
+        // Load features
+        var shaderDrawParametersFeatures = new VkPhysicalDeviceShaderDrawParametersFeatures {
+            ShaderDrawParameters = true
+        };
+
+        var features12 = new VkPhysicalDeviceVulkan12Features {
+            BufferDeviceAddress = true,
+            DescriptorIndexing = true,
+            Next = &shaderDrawParametersFeatures
+        };
+
+        var features13 = new VkPhysicalDeviceVulkan13Features {
+            DynamicRendering = true,
+            Synchronization2 = true,
+            Next = &features12
+        };
+
+        // We only need 3 since the max number of queues will be 3
+        var queuePriorities = stackalloc float[]{1.0f, 1.0f, 1.0f};
+
+        var queueCreateInfos = usedQueues
+            .Select((queueCount, index) => (queueCount, index))
+            .Where(queue => queue.queueCount > 0)
+            .Select(queue => new VkDeviceQueueCreateInfo {
+                    QueueFamilyIndex = queue.index,
+                    QueueCount = queue.queueCount,
+                    QueuePriorities = queuePriorities
+                }
+            )
+            .ToArray();
+
+        device = physicalDevice.CreateDevice(new DeviceEx.CreateInfo {
+                Extensions = deviceExtensions,
+                QueueCreateInfos = queueCreateInfos,
+                Next = &features13
+            }
+        );
+
+        // Extract Queues
+        if (!unifiedTransferQueue) {
+            transferQueue = new VulkanQueue(
+                transferQueueIndex,
+                device.GetQueue(transferQueueIndex, --usedQueues[transferQueueIndex])
+            );
+        }
+
+        if (!unifiedComputeQueue) {
+            computeQueue = new VulkanQueue(
+                computeQueueIndex,
+                device.GetQueue(computeQueueIndex, --usedQueues[computeQueueIndex])
+            );
+        }
+
+        graphicsQueue = new VulkanQueue(
+            graphicsQueueIndex,
+            device.GetQueue(graphicsQueueIndex, --usedQueues[graphicsQueueIndex])
+        );
+    }
+
+    /// <summary>
+    /// Set up the Memory allocator for managing GPU Memory
+    /// </summary>
+    /// <returns>An allocator for the <see cref="device"/></returns>
+    private VmaAllocator InitialiseVma() {
+        Logger.EngineLogger.Trace("Initializing VMA");
+
+        return device.CreateVmaAllocator(new VmaAllocatorCreateInfo {
+            PhysicalDevice = physicalDevice,
+            Device = device,
+            Instance = instance,
+            VulkanApiVersion = (uint) VulkanHelpers.Api.VERSION_1_3
+        });
+    }
+
+    private void initialiseWindow(SdlWindow sdlWindow) {
+        // Get surface from SDL
+        var surface = new VkSurfaceKHR(Sdl.Vulkan.CreateSurface(sdlWindow, instance.VkHandle));
+
+        VulkanWindow vulkanWindow = new(surface);
+        windows.Add(vulkanWindow);
+
+        initialiseWindowSwapchain(vulkanWindow);
+    }
+
+    private void initialiseWindowSwapchain(VulkanWindow sdlWindow) {
+
+    }
+
+    /* --------------------------------------- */
+    /* Queues                                  */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Get the best queue available for the given required queue flags.
+    ///
+    /// <para>
+    /// This tries to select the queue that has all the required flags, and the least number of flags, I.e. the most
+    /// specific queue.
+    /// </para>
+    /// </summary>
+    /// <param name="queueFamilies">A list of <see cref="VkQueueFamilyProperties"/> available on the <see cref="physicalDevice"/></param>
+    /// <param name="requiredFlags">The flags that are minimum required for the sought after queue</param>
+    /// <param name="usedQueues">An array mapping queue family index to the number of queues from that family already used</param>
+    /// <returns>The queue family index of the found queue</returns>
+    public int GetBestQueue(VkQueueFamilyProperties[] queueFamilies, VkQueueFlags requiredFlags, int[] usedQueues) {
+        return queueFamilies
+            .Select((properties, index) => (properties, index))
+            .Where((properties) =>
+                (properties.properties.QueueFlags & requiredFlags) != 0
+                    && usedQueues[properties.index] < properties.properties.QueueCount
+            )
+            .OrderBy(properties => BitOperations.PopCount((uint) properties.properties.QueueFlags))
+            .Select(properties => properties.index)
+            .FirstOrDefault(-1);
+    }
+
+    /* --------------------------------------- */
+    /* Debug Handling                          */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// The Callback used for validation layer messages
+    /// </summary>
+    /// <param name="severityFlags">The flags for the severity of the message</param>
+    /// <param name="messageTypeFlags">The flags for the type of the message</param>
+    /// <param name="pCallbackData">The message data</param>
+    /// <param name="pUserData">An attached pointer for user data</param>
+    /// <returns>Always false</returns>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe Bool32 VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagsEXT severityFlags,
+        VkDebugUtilsMessageTypeFlagsEXT messageTypeFlags,
+        VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void* pUserData) {
+        var message = Marshal.PtrToStringUTF8((nint) pCallbackData->Message);
+        Logger.EngineLogger.Warn("Vulkan | {Flags} | {Message}", severityFlags, message);
+
+        return false;
+    }
+
+
+    /* --------------------------------------- */
+    /* Clean-up                                */
+    /* --------------------------------------- */
+
+    public void CleanupWindow(VulkanWindow window) {
+        device.DestroySwapchainKHR(window.swapchain, null);
+
+        instance.DestroySurfaceKHR(window.surface, null);
+    }
+
+    public void Cleanup() {
+        device.WaitIdle();
+
+        // Allocations
+
+        // Windows
+        foreach (var vulkanWindow in windows) {
+            CleanupWindow(vulkanWindow);
+        }
+
+        device.DestroyVmaAllocator(allocator);
+        device.Dispose();
+
+        instance.DestroyDebugUtilsMessengerEXT(debugMessenger, null);
+        instance.Dispose();
+    }
+
+    /* --------------------------------------- */
+    /* Window Handling                         */
+    /* --------------------------------------- */
+
+    public void RegisterWindow(SdlWindow window) {
+        throw new NotImplementedException();
+        // Create Surface
+        // Create swapchain
+    }
+}

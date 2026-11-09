@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatEngine", "DatEngine\DatEngine.csproj", "{5C7D0EC9-E356-4B53-8A54-9E597EA56AB2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatGame", "DatGame\DatGame.csproj", "{F6ED2C6B-1D92-428A-B754-285A6EC72A37}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatGenerator", "DatGenerator\DatGenerator.csproj", "{02CEBF81-AFC2-4982-858E-0EDF55CEC458}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5C7D0EC9-E356-4B53-8A54-9E597EA56AB2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C7D0EC9-E356-4B53-8A54-9E597EA56AB2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5C7D0EC9-E356-4B53-8A54-9E597EA56AB2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5C7D0EC9-E356-4B53-8A54-9E597EA56AB2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6ED2C6B-1D92-428A-B754-285A6EC72A37}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6ED2C6B-1D92-428A-B754-285A6EC72A37}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6ED2C6B-1D92-428A-B754-285A6EC72A37}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6ED2C6B-1D92-428A-B754-285A6EC72A37}.Release|Any CPU.Build.0 = Release|Any CPU
+		{02CEBF81-AFC2-4982-858E-0EDF55CEC458}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{02CEBF81-AFC2-4982-858E-0EDF55CEC458}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{02CEBF81-AFC2-4982-858E-0EDF55CEC458}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{02CEBF81-AFC2-4982-858E-0EDF55CEC458}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
