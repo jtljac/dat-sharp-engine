@@ -3,8 +3,8 @@
 using DatEngine;
 using DatEngine.Gpu.Vulkan;
 
-DatBrutalEngine datBrutalEngine = new(new VulkanGpu());
+DatSharpEngine datSharpEngine = new(new VulkanGpu());
 
-datBrutalEngine
+datSharpEngine
     .Init()
     .StartLoop();

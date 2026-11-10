@@ -11,10 +11,7 @@ using DatEngine.Util;
 
 namespace DatEngine.Gpu.Vulkan;
 
-public class VulkanGpu : IGpu {
-    [CVar("Test")]
-    public static CVar<int> test = new(5);
-
+public class VulkanGpu : BaseGpu {
     // Vulkan Instance Objects
     /// <summary>
     /// The instance of vulkan used for interacting with Vulkan
@@ -96,7 +93,7 @@ public class VulkanGpu : IGpu {
      * Initialise the Vulkan GPU Handler, and all it's required components
      * </summary>
      */
-    public void Init(SdlWindow primaryWindow) {
+    public override void Init(SdlWindow primaryWindow) {
         Logger.EngineLogger.Trace("Initializing Vulkan");
 
         instance = InitialiseInstance();
@@ -371,7 +368,7 @@ public class VulkanGpu : IGpu {
         instance.DestroySurfaceKHR(window.surface, null);
     }
 
-    public void Cleanup() {
+    public override void Cleanup() {
         device.WaitIdle();
 
         // Allocations
@@ -392,7 +389,7 @@ public class VulkanGpu : IGpu {
     /* Window Handling                         */
     /* --------------------------------------- */
 
-    public void RegisterWindow(SdlWindow window) {
+    public override void RegisterWindow(SdlWindow window) {
         throw new NotImplementedException();
         // Create Surface
         // Create swapchain

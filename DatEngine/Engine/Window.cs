@@ -1,5 +1,7 @@
+using Brutal.Numerics;
 using Brutal.SdlApi;
 using DatEngine.Gpu;
+using DatEngine.Util;
 
 namespace DatEngine.Engine;
 
@@ -7,14 +9,18 @@ namespace DatEngine.Engine;
  * <summary>A window in the application, with its own input queue and render target</summary>
  */
 public class Window {
-    private IGpu _gpu;
+    [CVar("VPrimaryWindowSize", "The window size for the primary window", CVarFlags.Persistent)]
+    public static CVar<int2> primaryWindowSize = new(new int2(1920, 1080));
+
+    private BaseGpu _Gpu;
     private SdlWindow _window;
 
-    public void Init(String title, int width, int height, SdlWindowFlags flags) {
-
+    public Window(String title, int width, int height, SdlWindowFlags flags) {
         _window = Sdl.Video.CreateWindow(title, width, height, flags);
-        _gpu.RegisterWindow(_window);
+        _Gpu.RegisterWindow(_window);
     }
+
+
 
     // Size
     // Resizable

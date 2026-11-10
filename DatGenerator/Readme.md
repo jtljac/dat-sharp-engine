@@ -1,23 +1,11 @@
-# Roslyn Source Generators Sample
+This module holds the Roslyn code for automatically generating code.
 
-A set of three projects that illustrates Roslyn source generators. Enjoy this template to learn from and modify source generators for your own needs.
+## [CVarGenerator](CVarGenerator.cs)
+This file handles automatic generation and registration of CVars, you can add an annotation to any public static
+instantiation of a CVar<T> and it will wire it into the registry.
 
-## Content
-### CVarGenerator
-A .NET Standard project with implementations of sample source generators.
-**You must build this project to see the result (generated code) in the IDE.**
+## [BrutalNumericsJsonGenerator](BrutalNumericsJsonGenerator.cs)
+This file Generates a [JSONConverter](https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/converters-how-to)
+for each complete class in [Brutal Numerics library](https://www.nuget.org/packages/Ahwoo.BRUTAL.Numerics). 
 
-- [SampleSourceGenerator.cs](SampleSourceGenerator.cs): A source generator that creates C# classes based on a text file (in this case, Domain Driven Design ubiquitous language registry).
-- [SampleIncrementalSourceGenerator.cs](SampleIncrementalSourceGenerator.cs): A source generator that creates a custom report based on class properties. The target class should be annotated with the `Generators.ReportAttribute` attribute.
-
-## How To?
-### How to debug?
-- Use the [launchSettings.json](Properties/launchSettings.json) profile.
-- Debug tests.
-
-### How can I determine which syntax nodes I should expect?
-Consider using the Roslyn Visualizer tool window, which allows you to observe the syntax tree.
-
-### How to learn more about wiring source generators?
-Watch the walkthrough video: [Let’s Build an Incremental Source Generator With Roslyn, by Stefan Pölz](https://youtu.be/azJm_Y2nbAI)
-The complete set of information is available in [Source Generators Cookbook](https://github.com/dotnet/roslyn/blob/main/docs/features/source-generators.cookbook.md).
+This takes advantage of the fact that all the serializable fields are marked with `[XMLAttribute]`.

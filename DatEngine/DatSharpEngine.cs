@@ -7,13 +7,15 @@ namespace DatEngine;
 /// <summary>
 /// The entry point of the engine
 /// </summary>
-/// <param name="gpu">The GPU class to use for this engine</param>
-public class DatBrutalEngine(IGpu gpu) {
-    public IGpu gpu { get; } = gpu;
-    // public CVarManager;
+/// <param name="baseGpu">The GPU class to use for this engine</param>
+public class DatSharpEngine(BaseGpu baseGpu) {
+    public BaseGpu baseGpu { get; } = baseGpu;
+    public readonly CVarManager cvarMan = new();
 
-    public DatBrutalEngine Init() {
+    public DatSharpEngine Init() {
         Logger.EngineLogger.Info("Initializing Engine");
+        cvarMan.Init();
+
         InitialiseSdl();
         InitialiseGpu();
         // Create primary window
@@ -29,7 +31,7 @@ public class DatBrutalEngine(IGpu gpu) {
     private void InitialiseGpu() {
         Logger.EngineLogger.Trace("Initializing Gpu");
         // Make primary window
-        gpu.Init(null);
+        baseGpu.Init(null);
     }
 
     public void StartLoop() {

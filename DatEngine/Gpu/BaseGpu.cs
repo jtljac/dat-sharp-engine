@@ -5,19 +5,19 @@ namespace DatEngine.Gpu;
 /// <summary>
 /// Generic Interface for GPU operations
 /// </summary>
-public interface IGpu {
+public abstract class BaseGpu {
      /// <summary>
      /// Set up the GPU ready for use
      /// </summary>
-     public void Init(SdlWindow primaryWindow);
+     public abstract void Init(SdlWindow primaryWindow);
 
      /// <summary>
      /// Clean up the GPU resources
      /// </summary>
-     public void Cleanup();
+     public abstract void Cleanup();
 
       /// <summary>
       /// Set up a new window for the GPU to render to.
       /// </summary>
-     public void RegisterWindow(SdlWindow window);
+     public abstract void RegisterWindow(SdlWindow window);
 }
