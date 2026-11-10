@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace DatEngine.Util;
 
@@ -74,19 +75,22 @@ public interface ICVar {
     /// </summary>
     CVarFlags flags { get; }
     /// <summary>
-    /// Get the value of the CVar as a string for serialisation and for the console
+    /// Get the value of the CVar as a serialized string for writing and for the console
     /// </summary>
     /// <returns>The Value of the CVar as a string</returns>
-    string GetStringValue();
+    /// <exception cref="CVarException">The CVar Value is not serializable</exception>
+    string SerializeValue();
     /// <summary>
-    /// Set the value of the CVar from a string
+    /// Set the value of the CVar from a serialized string
     /// <para>
     /// This will fail if the <see cref="CVarFlags.ReadOnly"/> flag is set
     /// </para>
     /// </summary>
-    /// <param name="value">A string representing the new value</param>
+    /// <param name="serializedString">A string representing the new value</param>
     /// <returns><c>true</c> if successful</returns>
-    bool SetStringValue(string value);
+    ///
+    /// <exception cref="CVarException"><paramref name="serializedString"/> is not a valid string for this value</exception>
+    void DeserializeValue(string serializedString);
 
     /// <summary>
     /// Reset the CVar back to its initial value
@@ -110,7 +114,7 @@ public interface ICVar {
 /// </summary>
 /// <seealso cref="CVarAttribute" />
 /// <typeparam name="T">The Type the CVar is storing</typeparam>
-public class CVar<T>: ICVar where T: IComparable<T>, IFormattable {
+public class CVar<T>: ICVar where T: struct, IComparable<T> {
     /// <inheritdoc/>
     public string name { get; }
     /// <inheritdoc/>
@@ -145,6 +149,7 @@ public class CVar<T>: ICVar where T: IComparable<T>, IFormattable {
     public CVar(T value) {
         this.value = value;
         _defaultValue = value;
+        name = "";
         description = "";
         flags = CVarFlags.None;
     }
@@ -158,18 +163,26 @@ public class CVar<T>: ICVar where T: IComparable<T>, IFormattable {
     }
 
     /// <inheritdoc/>
-    public string GetStringValue() {
-        return value.ToString() ?? "";
+    public string SerializeValue() {
+        try {
+            return JsonHelper.JsonSerialize(value);
+        } catch (NotSupportedException exception) {
+            throw new CVarException("Failed to serialize value", exception);
+        }
     }
+
     /// <inheritdoc/>
-    public bool SetStringValue(string newValueString) {
-        if (flags.HasFlag(CVarFlags.ReadOnly)) return false;
+    public void DeserializeValue(string serializedString) {
+        if (flags.HasFlag(CVarFlags.ReadOnly)) throw new CVarException("CVar is Read Only");
 
         try {
-            value = (T) Convert.ChangeType(newValueString, typeof(T));
-            return true;
-        } catch (InvalidCastException) {
-            return false;
+            value = JsonHelper.JsonDeserialize<T>(serializedString);
+        } catch (ArgumentException exception) {
+            throw new CVarException("Failed to deserialize value", exception);
+        } catch (JsonException exception) {
+            throw new CVarException("Failed to deserialize value", exception);
+        } catch (NotSupportedException exception) {
+            throw new CVarException("Failed to deserialize value", exception);
         }
     }
 
@@ -189,21 +202,27 @@ public class CVar<T>: ICVar where T: IComparable<T>, IFormattable {
 }
 
 public class CVarManager {
-    private ConcurrentDictionary<string, ICVar> _cVars = [];
+    private ConcurrentDictionary<string, ICVar> _cVars = new(StringComparer.OrdinalIgnoreCase);
 
-    private CVarManager() {
+    public void Init() {
         Logger.EngineLogger.Trace("Initializing CVars");
         CVarAutoInitialiser.InitialiseAll(this);
 
         // Load persistent from disk
     }
 
-    public CVar<T> Register<T>(string name, T defaultValue, string description, CVarFlags flags)
-        where T : IComparable<T>, IFormattable {
+    public CVar<T> Register<T>(string name, T defaultValue, string description, CVarFlags flags) where T : struct, IComparable<T> {
         var cVar = new CVar<T>(defaultValue, name, description, flags);
 
         return !_cVars.TryAdd(name, cVar)
             ? throw new ArgumentException($"Duplicate CVar name: {name}")
             : cVar;
     }
+}
+
+[Serializable]
+public class CVarException : Exception {
+    public CVarException() {}
+    public CVarException(string message) : base(message) {}
+    public CVarException(string message, Exception inner) : base(message, inner) {}
 }
