@@ -4,9 +4,11 @@ namespace DatEngine.Gpu.Vulkan;
 /// <summary>
 /// A collection of parameters related to a single window
 /// </summary>
-public class VulkanWindow(VkSurfaceKHR surface) {
+public class VulkanWindow(uint windowHandle) {
+    public uint windowHandle = windowHandle;
+
     // Surface
-    public readonly VkSurfaceKHR surface = surface;
+    public VkSurfaceKHR surface;
 
     // Swapchain
     public VkSwapchainKHR swapchain;

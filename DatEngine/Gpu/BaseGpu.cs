@@ -1,4 +1,5 @@
 using Brutal.SdlApi;
+using DatEngine.Util;
 
 namespace DatEngine.Gpu;
 
@@ -6,12 +7,17 @@ namespace DatEngine.Gpu;
 /// Generic Interface for GPU operations
 /// </summary>
 public abstract class BaseGpu {
-     /// <summary>
+ [CVar("IBufferedFrames", "The Minimum number of frames to use in a swapchain", CVarFlags.Persistent)]
+ public static CVar<int> bufferedFrames = 2;
+ [CVar("BVsync", "Whether to enable VSync", CVarFlags.Persistent)]
+ public static CVar<bool> enableVsync = true;
+
+    /// <summary>
      /// Set up the GPU ready for use
      /// </summary>
-     public abstract void Init(SdlWindow primaryWindow);
+     public abstract void Init();
 
-     /// <summary>
+    /// <summary>
      /// Clean up the GPU resources
      /// </summary>
      public abstract void Cleanup();
@@ -19,5 +25,7 @@ public abstract class BaseGpu {
       /// <summary>
       /// Set up a new window for the GPU to render to.
       /// </summary>
-     public abstract void RegisterWindow(SdlWindow window);
+      /// <param name="windowId">The id of the window to register</param>
+      /// <param name="sdlWindow">The SDL Window handle to use for setup</param>
+     public abstract void RegisterWindow(uint windowId, SdlWindow sdlWindow);
 }

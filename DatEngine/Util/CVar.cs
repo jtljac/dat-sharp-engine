@@ -114,7 +114,7 @@ public interface ICVar {
 /// </summary>
 /// <seealso cref="CVarAttribute" />
 /// <typeparam name="T">The Type the CVar is storing</typeparam>
-public class CVar<T>: ICVar where T: struct, IComparable<T> {
+public class CVar<T>: ICVar where T: struct {
     /// <inheritdoc/>
     public string name { get; }
     /// <inheritdoc/>
@@ -129,7 +129,7 @@ public class CVar<T>: ICVar where T: struct, IComparable<T> {
     public T value {
         get;
         set {
-            if (value.CompareTo(field) == 0) return;
+            if (EqualityComparer<T>.Default.Equals(value, field)) return;
             field = value;
             OnChange?.Invoke(this, value);
         }
@@ -154,7 +154,7 @@ public class CVar<T>: ICVar where T: struct, IComparable<T> {
         flags = CVarFlags.None;
     }
 
-    public CVar(T value, string name, string description, CVarFlags flags) {
+    internal CVar(T value, string name, string description, CVarFlags flags) {
         this.value = value;
         this.name = name;
         _defaultValue = value;
@@ -199,10 +199,14 @@ public class CVar<T>: ICVar where T: struct, IComparable<T> {
     public static implicit operator T(CVar<T> cVar) {
         return cVar.value;
     }
+
+    public static implicit operator CVar<T>(T value) {
+        return new CVar<T>(value);
+    }
 }
 
 public class CVarManager {
-    private ConcurrentDictionary<string, ICVar> _cVars = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ICVar> _cVars = new(StringComparer.OrdinalIgnoreCase);
 
     public void Init() {
         Logger.EngineLogger.Trace("Initializing CVars");

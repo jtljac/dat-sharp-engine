@@ -14,7 +14,7 @@ namespace DatEngine.Gpu.Vulkan;
 public class VulkanGpu : BaseGpu {
     // Vulkan Instance Objects
     /// <summary>
-    /// The instance of vulkan used for interacting with Vulkan
+    /// The instance of Vulkan used for interacting with Vulkan
     /// </summary>
     protected Instance instance = null!;
     /// <summary>
@@ -22,7 +22,7 @@ public class VulkanGpu : BaseGpu {
     /// </summary>
     protected VkDebugUtilsMessengerEXT debugMessenger;
     /// <summary>
-    /// The physical GPU that this vulkan instance will use
+    /// The physical GPU that this Vulkan instance will use
     /// </summary>
     protected PhysicalDevice physicalDevice = null!;
     /// <summary>
@@ -75,9 +75,9 @@ public class VulkanGpu : BaseGpu {
 
     // Windows
     /// <summary>
-    /// The windows that vulkan is set up to render to
+    /// The windows that Vulkan is set up to render to
     /// </summary>
-    protected List<VulkanWindow> windows = [];
+    protected Dictionary<uint, VulkanWindow> windows = [];
 
     /// <summary>
     /// The main window
@@ -85,7 +85,7 @@ public class VulkanGpu : BaseGpu {
     protected VulkanWindow? primaryWindow => windows.Count > 0 ? windows[0] : null;
 
     /* --------------------------------------- */
-    /* Initialisation                          */
+    /* Instance Initialisation                 */
     /* --------------------------------------- */
 
     /**
@@ -93,7 +93,7 @@ public class VulkanGpu : BaseGpu {
      * Initialise the Vulkan GPU Handler, and all it's required components
      * </summary>
      */
-    public override void Init(SdlWindow primaryWindow) {
+    public override void Init() {
         Logger.EngineLogger.Trace("Initializing Vulkan");
 
         instance = InitialiseInstance();
@@ -107,7 +107,7 @@ public class VulkanGpu : BaseGpu {
 
     /**
      * <summary>
-     * Set up the vulkan driver and retrieve the instance
+     * Set up the Vulkan driver and retrieve the instance
      * </summary>
      * <returns>A new Vulkan Instance</returns>
      */
@@ -196,8 +196,7 @@ public class VulkanGpu : BaseGpu {
         Logger.EngineLogger.Trace("Initialising Vulkan Logical Device");
 
         // Find all the queue families
-        var queueFamilies = new VkQueueFamilyProperties[physicalDevice.GetQueueFamilyProperties_Count()];
-        physicalDevice.GetQueueFamilyProperties_Write(queueFamilies.AsSpan());
+        var queueFamilies = VkHelper.GetQueueFamilyProperties(physicalDevice);
         var usedQueues = new int[queueFamilies.Length];
 
         var graphicsQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.GraphicsBit, usedQueues);
@@ -292,22 +291,59 @@ public class VulkanGpu : BaseGpu {
         });
     }
 
-    private void initialiseWindow(SdlWindow sdlWindow) {
+    /* --------------------------------------- */
+    /* Window Initialisation                   */
+    /* --------------------------------------- */
+
+    /// <summary>
+    /// Set up the surface for rendering to
+    /// </summary>
+    /// <param name="sdlWindow">The SDL handle that creates the surface</param>
+    /// <param name="vulkanWindow">The Vulkan window to store the surface in</param>
+    /// <exception cref="DatGpuException">Failed to create the surface for rendering to</exception>
+    private void InitialiseWindowSurface(SdlWindow sdlWindow, VulkanWindow vulkanWindow) {
+        Logger.EngineLogger.Trace($"Initialising window<{vulkanWindow.windowHandle}> surface");
+
         // Get surface from SDL
-        var surface = new VkSurfaceKHR(Sdl.Vulkan.CreateSurface(sdlWindow, instance.VkHandle));
-
-        VulkanWindow vulkanWindow = new(surface);
-        windows.Add(vulkanWindow);
-
-        initialiseWindowSwapchain(vulkanWindow);
+        try {
+            vulkanWindow.surface = new VkSurfaceKHR(Sdl.Vulkan.CreateSurface(sdlWindow, instance.VkHandle));
+        } catch (SdlException exception) {
+            throw new DatGpuException($"Failed to create surface for window {vulkanWindow.windowHandle}", exception);
+        }
     }
 
-    private void initialiseWindowSwapchain(VulkanWindow sdlWindow) {
+    /// <summary>
+    /// Set up the swapchain
+    /// </summary>
+    /// <param name="vulkanWindow">The window to set up the swapchain for</param>
+    private void InitialiseWindowSwapchain(VulkanWindow vulkanWindow) {
+        Logger.EngineLogger.Trace($"Initialising window<{vulkanWindow.windowHandle}> swapchain");
 
+        var capabilities = physicalDevice.GetSurfaceCapabilitiesKHR(vulkanWindow.surface);
+        var format = GetBestSwapchainFormat(vulkanWindow);
+
+        vulkanWindow.swapchainExtent = capabilities.CurrentExtent;
+        vulkanWindow.swapchainFormat = format.Format;
+
+        var bufferedImages = Math.Clamp(bufferedFrames,
+            capabilities.MinImageCount,
+            capabilities.MaxImageCount == 0 ? int.MaxValue : capabilities.MaxImageCount
+        );
+
+        vulkanWindow.swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR(){
+            Surface = vulkanWindow.surface,
+            MinImageCount =  bufferedImages,
+            ImageFormat = vulkanWindow.swapchainFormat,
+            ImageColorSpace = format.ColorSpace,
+            ImageExtent = vulkanWindow.swapchainExtent,
+            ImageArrayLayers = 1,
+            ImageUsage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransferDstBit,
+            PresentMode = GetIdealPresentMode(vulkanWindow)
+        }, null);
     }
 
     /* --------------------------------------- */
-    /* Queues                                  */
+    /* Init Helpers                            */
     /* --------------------------------------- */
 
     /// <summary>
@@ -322,7 +358,7 @@ public class VulkanGpu : BaseGpu {
     /// <param name="requiredFlags">The flags that are minimum required for the sought after queue</param>
     /// <param name="usedQueues">An array mapping queue family index to the number of queues from that family already used</param>
     /// <returns>The queue family index of the found queue</returns>
-    public int GetBestQueue(VkQueueFamilyProperties[] queueFamilies, VkQueueFlags requiredFlags, int[] usedQueues) {
+    protected int GetBestQueue(VkQueueFamilyProperties[] queueFamilies, VkQueueFlags requiredFlags, int[] usedQueues) {
         return queueFamilies
             .Select((properties, index) => (properties, index))
             .Where((properties) =>
@@ -332,6 +368,46 @@ public class VulkanGpu : BaseGpu {
             .OrderBy(properties => BitOperations.PopCount((uint) properties.properties.QueueFlags))
             .Select(properties => properties.index)
             .FirstOrDefault(-1);
+    }
+
+    /// <summary>
+    /// Get the best available swapchain format for the given <paramref name="vulkanWindow"/>'s surface
+    /// </summary>
+    /// <param name="vulkanWindow">The Window to get the best format for</param>
+    /// <returns>The best available swapchain format</returns>
+    protected VkSurfaceFormatKHR GetBestSwapchainFormat(VulkanWindow vulkanWindow) {
+        var formats = VkHelper.GetSurfaceFormats(physicalDevice, vulkanWindow.surface);
+
+        foreach (var format in formats) {
+            if (format is { Format: VkFormat.B8G8R8SRGB, ColorSpace: VkColorSpaceKHR.SRGBNonlinearKHR }) {
+                return format;
+            }
+        }
+
+        // TODO: Maybe we can pick slightly better
+        return formats[0];
+    }
+
+    /// <summary>
+    /// Get the best available present mode for the given <paramref name="vulkanWindow"/>'s surface
+    /// </summary>
+    /// <param name="vulkanWindow">The Window to get the best present mode for</param>
+    /// <returns>The best available present mode</returns>
+    protected VkPresentModeKHR GetIdealPresentMode(VulkanWindow vulkanWindow) {
+        var availablePresentModes = VkHelper.GetSurfacePresentModes(physicalDevice, vulkanWindow.surface);
+
+        // Prefer Relaxed, Neither are guaranteed though
+        // Note we want to avoid mailbox as we don't need to utterly saturate the GPU
+        foreach (var presentMode in availablePresentModes) {
+            if (enableVsync
+                    ? presentMode == VkPresentModeKHR.FifoRelaxedKHR
+                    : presentMode == VkPresentModeKHR.ImmediateKHR) {
+                return presentMode;
+            }
+        }
+
+        // We're guaranteed to have Fifo if we've gotten this far
+        return VkPresentModeKHR.FifoKHR;
     }
 
     /* --------------------------------------- */
@@ -374,9 +450,10 @@ public class VulkanGpu : BaseGpu {
         // Allocations
 
         // Windows
-        foreach (var vulkanWindow in windows) {
+        foreach (var vulkanWindow in windows.Values) {
             CleanupWindow(vulkanWindow);
         }
+        windows.Clear();
 
         device.DestroyVmaAllocator(allocator);
         device.Dispose();
@@ -389,9 +466,13 @@ public class VulkanGpu : BaseGpu {
     /* Window Handling                         */
     /* --------------------------------------- */
 
-    public override void RegisterWindow(SdlWindow window) {
-        throw new NotImplementedException();
-        // Create Surface
-        // Create swapchain
+    /// <inheritdoc/>
+    public override void RegisterWindow(uint windowId, SdlWindow sdlWindow) {
+        VulkanWindow vulkanWindow = new(windowId);
+        windows.Add(windowId, vulkanWindow);
+
+        InitialiseWindowSurface(sdlWindow, vulkanWindow);
+
+        InitialiseWindowSwapchain(vulkanWindow);
     }
 }
