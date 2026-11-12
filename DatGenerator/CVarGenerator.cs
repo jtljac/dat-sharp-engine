@@ -92,6 +92,20 @@ public class CVarGenerator : IIncrementalGenerator {
             ));
         }
 
+        if (context.TargetNode is VariableDeclaratorSyntax { Initializer: null }) {
+            diagnostics.Add(new DiagnosticInfo(
+                new DiagnosticDescriptor(
+                    "CVAR005",
+                    "CVar Must had a default value",
+                    $"{field.Name} must be instantiated with a value for it's default",
+                    "DatEngine.Usage",
+                    DiagnosticSeverity.Error,
+                    true
+                ),
+                field.Locations.FirstOrDefault()
+            ));
+        }
+
         // It'd be much easier to access these by name, rather than by index
         var attributeArgs = attribute.ConstructorArguments
             .Select((arg, index) => (index, arg))
@@ -111,7 +125,7 @@ public class CVarGenerator : IIncrementalGenerator {
                     "CVAR003",
                     "CVar Must have a name",
                     $"{field.Name}'s CVar Name is required to be set for console and lookups",
-                    "DatEngine.Design",
+                    "DatEngine.Usage",
                     DiagnosticSeverity.Error,
                     true
                 ),
@@ -139,7 +153,7 @@ public class CVarGenerator : IIncrementalGenerator {
     /// <param name="context">Source generation context used to add source files.</param>
     private static void GenerateCode(ImmutableArray<Result<CVarSchema>> fields, SourceProductionContext context) {
         // Track seen names so we can report duplicates
-        HashSet<string> seenFieldNames = [with(StringComparer.InvariantCultureIgnoreCase)];
+        var seenFieldNames = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
 
         StringBuilder initBuilder = new();
         foreach (var field in fields) {
