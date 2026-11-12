@@ -215,7 +215,7 @@ public class CVarManager {
         // Load persistent from disk
     }
 
-    public CVar<T> Register<T>(string name, T defaultValue, string description, CVarFlags flags) where T : struct, IComparable<T> {
+    public CVar<T> Register<T>(string name, T defaultValue, string description, CVarFlags flags) where T : struct{
         var cVar = new CVar<T>(defaultValue, name, description, flags);
 
         return !_cVars.TryAdd(name, cVar)
