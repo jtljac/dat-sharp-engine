@@ -15,7 +15,7 @@ public class WindowManager(BaseGpu gpu) {
     [CVar("VPrimaryWindowSize", "The window size for the primary window", CVarFlags.Persistent)]
     public static CVar<int2> primaryWindowSize = new int2(1920, 1080);
 
-    [CVar("EPrimaryFullscreenMode", "The window size for the primary window", CVarFlags.Persistent)]
+    [CVar("EPrimaryFullscreenMode", "The fullscreen mode for the primary window", CVarFlags.Persistent)]
     public static CVar<FullscreenMode> primaryFullscreenMode = FullscreenMode.WindowedBorderless;
 
     /// <summary>
