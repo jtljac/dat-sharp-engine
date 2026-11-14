@@ -7,11 +7,16 @@ using Brutal.Strings;
 using Brutal.VulkanApi;
 using Brutal.VulkanApi.Abstractions;
 using Brutal.VulkanApi.Vma;
+using DatEngine.Engine;
 using DatEngine.Util;
 
 namespace DatEngine.Gpu.Vulkan;
 
 public class VulkanGpu : BaseGpu {
+    private static readonly string[] VulkanInstanceExtensions = [
+        "VK_KHR_get_surface_capabilities2"
+    ];
+
     // Vulkan Instance Objects
     /// <summary>
     /// The instance of Vulkan used for interacting with Vulkan
@@ -124,6 +129,10 @@ public class VulkanGpu : BaseGpu {
             instanceExtensions.Add(instanceExtension);
         }
 
+        foreach (var instanceExtension in VulkanInstanceExtensions) {
+            instanceExtensions.Add(instanceExtension);
+        }
+
 #if DEBUG
         // In debug mode, we want to load the validation layers
         VulkanHelpers.AddDebugExtensions(instanceExtensions);
@@ -199,6 +208,7 @@ public class VulkanGpu : BaseGpu {
         var queueFamilies = VkHelper.GetQueueFamilyProperties(physicalDevice);
         var usedQueues = new int[queueFamilies.Length];
 
+        // We're just gonna assume this supports present
         var graphicsQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.GraphicsBit, usedQueues);
         usedQueues[graphicsQueueIndex]++;
 
@@ -207,10 +217,19 @@ public class VulkanGpu : BaseGpu {
         else unifiedComputeQueue = true;
 
         var transferQueueIndex = GetBestQueue(queueFamilies, VkQueueFlags.TransferBit, usedQueues);
+
+        // Since transfer queue ability is guaranteed if the Graphics or compute bit is set, it's optional to set the
+        // transfer flag in these cases, so just in case we'll try grabbing a compute queue, then a graphics queue
+        if (transferQueueIndex == -1) {
+            foreach (var queueFlag in (VkQueueFlags[]) [VkQueueFlags.ComputeBit, VkQueueFlags.GraphicsBit]) {
+                transferQueueIndex = GetBestQueue(queueFamilies, queueFlag, usedQueues);
+
+                if (transferQueueIndex != -1) break;
+            }
+        }
+
         if (transferQueueIndex != -1) usedQueues[transferQueueIndex]++;
         else unifiedTransferQueue = true;
-
-
 
         // Extensions
         var deviceExtensions = new HashSet<string>();
@@ -319,18 +338,23 @@ public class VulkanGpu : BaseGpu {
     private void InitialiseWindowSwapchain(VulkanWindow vulkanWindow) {
         Logger.EngineLogger.Trace($"Initialising window<{vulkanWindow.windowHandle}> swapchain");
 
-        var capabilities = physicalDevice.GetSurfaceCapabilitiesKHR(vulkanWindow.surface);
+        var capabilities = VkHelper.GetSurfaceCapabilities(physicalDevice, vulkanWindow.surface);
         var format = GetBestSwapchainFormat(vulkanWindow);
 
-        vulkanWindow.swapchainExtent = capabilities.CurrentExtent;
+        // Wayland returns 0xFFFFFFFF (-1) to indicate that the surface extent will be determined by the window size
+        vulkanWindow.swapchainExtent = capabilities.SurfaceCapabilities.CurrentExtent.Width == -1
+            ? new VkExtent2D(WindowManager.primaryWindowSize.value.X, WindowManager.primaryWindowSize.value.Y)
+            : capabilities.SurfaceCapabilities.CurrentExtent;
         vulkanWindow.swapchainFormat = format.Format;
 
         var bufferedImages = Math.Clamp(bufferedFrames,
-            capabilities.MinImageCount,
-            capabilities.MaxImageCount == 0 ? int.MaxValue : capabilities.MaxImageCount
+            capabilities.SurfaceCapabilities.MinImageCount,
+            capabilities.SurfaceCapabilities.MaxImageCount == 0
+                ? int.MaxValue
+                : capabilities.SurfaceCapabilities.MaxImageCount
         );
 
-        vulkanWindow.swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR(){
+        vulkanWindow.swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR {
             Surface = vulkanWindow.surface,
             MinImageCount =  bufferedImages,
             ImageFormat = vulkanWindow.swapchainFormat,
@@ -338,7 +362,9 @@ public class VulkanGpu : BaseGpu {
             ImageExtent = vulkanWindow.swapchainExtent,
             ImageArrayLayers = 1,
             ImageUsage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransferDstBit,
-            PresentMode = GetIdealPresentMode(vulkanWindow)
+            PresentMode = GetIdealPresentMode(vulkanWindow),
+            PreTransform = VkSurfaceTransformFlagsKHR.IdentityBitKHR,
+            CompositeAlpha = VkCompositeAlphaFlagsKHR.OpaqueBitKHR
         }, null);
     }
 
@@ -358,14 +384,14 @@ public class VulkanGpu : BaseGpu {
     /// <param name="requiredFlags">The flags that are minimum required for the sought after queue</param>
     /// <param name="usedQueues">An array mapping queue family index to the number of queues from that family already used</param>
     /// <returns>The queue family index of the found queue</returns>
-    protected int GetBestQueue(VkQueueFamilyProperties[] queueFamilies, VkQueueFlags requiredFlags, int[] usedQueues) {
+    protected static int GetBestQueue(VkQueueFamilyProperties2[] queueFamilies, VkQueueFlags requiredFlags, int[] usedQueues) {
         return queueFamilies
             .Select((properties, index) => (properties, index))
             .Where((properties) =>
-                (properties.properties.QueueFlags & requiredFlags) != 0
-                    && usedQueues[properties.index] < properties.properties.QueueCount
+                (properties.properties.QueueFamilyProperties.QueueFlags & requiredFlags) != 0
+                    && usedQueues[properties.index] < properties.properties.QueueFamilyProperties.QueueCount
             )
-            .OrderBy(properties => BitOperations.PopCount((uint) properties.properties.QueueFlags))
+            .OrderBy(properties => BitOperations.PopCount((uint) properties.properties.QueueFamilyProperties.QueueFlags))
             .Select(properties => properties.index)
             .FirstOrDefault(-1);
     }
@@ -379,13 +405,17 @@ public class VulkanGpu : BaseGpu {
         var formats = VkHelper.GetSurfaceFormats(physicalDevice, vulkanWindow.surface);
 
         foreach (var format in formats) {
-            if (format is { Format: VkFormat.B8G8R8SRGB, ColorSpace: VkColorSpaceKHR.SRGBNonlinearKHR }) {
-                return format;
+            if (format is {
+                    // This one is basically guaranteed
+                    SurfaceFormat: { Format: VkFormat.B8G8R8SRGB, ColorSpace: VkColorSpaceKHR.SRGBNonlinearKHR }
+                }) {
+                return format.SurfaceFormat;
             }
         }
 
+        // Sometimes it's not basically guaranteed, fallback to whatever is first in the array
         // TODO: Maybe we can pick slightly better
-        return formats[0];
+        return formats[0].SurfaceFormat;
     }
 
     /// <summary>
@@ -445,6 +475,7 @@ public class VulkanGpu : BaseGpu {
     }
 
     public override void Cleanup() {
+        // Finish up before we start ripping out the memory
         device.WaitIdle();
 
         // Allocations
@@ -468,6 +499,7 @@ public class VulkanGpu : BaseGpu {
 
     /// <inheritdoc/>
     public override void RegisterWindow(uint windowId, SdlWindow sdlWindow) {
+        Logger.EngineLogger.Trace($"Initialising window<{windowId}> in Vulkan");
         VulkanWindow vulkanWindow = new(windowId);
         windows.Add(windowId, vulkanWindow);
 
