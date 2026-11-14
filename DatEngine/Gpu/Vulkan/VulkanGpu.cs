@@ -366,6 +366,27 @@ public class VulkanGpu : BaseGpu {
             PreTransform = VkSurfaceTransformFlagsKHR.IdentityBitKHR,
             CompositeAlpha = VkCompositeAlphaFlagsKHR.OpaqueBitKHR
         }, null);
+
+        // With the swapchain created, we still need to get our images
+        vulkanWindow.swapchainImages = [..
+            VkHelper.GetSwapchainImages(device, vulkanWindow.swapchain).Select(image => new SwapchainImages(
+                image,
+                device.CreateImageView(new VkImageViewCreateInfo {
+                        Image = image,
+                        ViewType = VkImageViewType._2D,
+                        Format = vulkanWindow.swapchainFormat,
+                        SubresourceRange = {
+                            AspectMask = VkImageAspectFlags.ColorBit,
+                            BaseMipLevel = 0,
+                            LevelCount = 1,
+                            LayerCount = 1
+                        }
+                    },
+                    null
+                ),
+                device.CreateSemaphore(new VkSemaphoreCreateInfo(), null)
+            )
+        )];
     }
 
     /* --------------------------------------- */
@@ -468,12 +489,6 @@ public class VulkanGpu : BaseGpu {
     /* Clean-up                                */
     /* --------------------------------------- */
 
-    public void CleanupWindow(VulkanWindow window) {
-        device.DestroySwapchainKHR(window.swapchain, null);
-
-        instance.DestroySurfaceKHR(window.surface, null);
-    }
-
     public override void Cleanup() {
         // Finish up before we start ripping out the memory
         device.WaitIdle();
@@ -482,7 +497,7 @@ public class VulkanGpu : BaseGpu {
 
         // Windows
         foreach (var vulkanWindow in windows.Values) {
-            CleanupWindow(vulkanWindow);
+            vulkanWindow.Cleanup(instance, device);
         }
         windows.Clear();
 
@@ -506,5 +521,7 @@ public class VulkanGpu : BaseGpu {
         InitialiseWindowSurface(sdlWindow, vulkanWindow);
 
         InitialiseWindowSwapchain(vulkanWindow);
+
+
     }
 }
